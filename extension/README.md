@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./icons/logo.svg" width="96" height="96" alt="Kobol logo" />
+  <img src="./icon.png" width="96" height="96" alt="Kobol logo" />
 </p>
 
 # Kobol Language Support
