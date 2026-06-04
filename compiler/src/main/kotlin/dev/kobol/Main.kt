@@ -250,7 +250,9 @@ internal fun compileFile(
     outDir.mkdirs()
 
     if (options.javaSource) {
-        val javaSource = JavaTranspiler(checker, moduleRegistry).transpile(program)
+        // Pass the file-derived class name so the emitted `public final class` matches
+        // the .java filename (javac requires this) and the bytecode path's class name.
+        val javaSource = JavaTranspiler(checker, moduleRegistry).transpile(program, javaClass)
         val javaFile = File(outDir, "$javaClass.java")
         javaFile.writeText(javaSource)
         println("kobolc: generated ${javaFile.path}")

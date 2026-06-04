@@ -2,7 +2,6 @@ package dev.kobol.codegen
 
 import dev.kobol.parser.ast.*
 import dev.kobol.semantic.KobolType
-import dev.kobol.semantic.Symbol
 import dev.kobol.semantic.TypeChecker
 
 /**
@@ -36,7 +35,15 @@ class JavaTranspiler(
     private val namedConditions = mutableMapOf<String, Expression>()
     private var currentClass = "Main"  // tracks the outer class name for method references
 
-    fun transpile(program: Program): String {
+    /**
+     * Transpile [program] to Java source.
+     *
+     * [className] is the name of the emitted top-level class. It defaults to a name
+     * derived from `program.name`, but callers should pass the SAME name they use
+     * for the output file (and the bytecode path), since Java requires a public
+     * class to live in a file of the same name — otherwise `javac` rejects it.
+     */
+    fun transpile(program: Program, className: String = javaClass(program.name)): String {
         sb.clear(); indent = 0
         namedConditions.clear()
         for (cond in program.namedConditions) namedConditions[cond.name] = cond.expr
@@ -51,8 +58,8 @@ class JavaTranspiler(
         line("import java.time.*;")
         blank()
 
-        line("public final class ${javaClass(program.name)} {")
-        currentClass = javaClass(program.name)
+        line("public final class $className {")
+        currentClass = className
         indent++
 
         // RECORD declarations → inner static classes
@@ -110,7 +117,7 @@ class JavaTranspiler(
         val kType = if (item.type != null) checker.toKobolType(item.type)
                     else item.initializer?.let { inferLiteralType(it) } ?: KobolType.UnknownType
         val jType = kobolTypeToJava(kType)
-        val init  = if (item.initializer != null) " = ${emitExpr(item.initializer)}"
+        val init  = if (item.initializer != null) " = ${emitExprFor(kType, item.initializer)}"
                     else " = ${defaultValue(kType)}"
         line("private static $jType ${javaIdent(item.name)}$init;")
     }
@@ -156,12 +163,12 @@ class JavaTranspiler(
 
     private fun emitStatement(stmt: Statement) {
         when (stmt) {
-            is MoveStatement     -> line("${emitRef(stmt.to)} = ${emitExpr(stmt.from)};")
-            is ComputeStatement  -> line("${emitRef(stmt.target)} = ${emitExpr(stmt.expr)};")
+            is MoveStatement     -> line("${emitRef(stmt.to)} = ${emitExprFor(refType(stmt.to), stmt.from)};")
+            is ComputeStatement  -> line("${emitRef(stmt.target)} = ${emitExprFor(refType(stmt.target), stmt.expr)};")
             is LocalVarDecl      -> {
                 val kType = stmt.type?.let { checker.toKobolType(it) }
                             ?: inferLiteralType(stmt.initializer)
-                line("${kobolTypeToJava(kType)} ${javaIdent(stmt.name)} = ${emitExpr(stmt.initializer)};")
+                line("${kobolTypeToJava(kType)} ${javaIdent(stmt.name)} = ${emitExprFor(kType, stmt.initializer)};")
             }
             is AddStatement      -> emitArith(stmt.target, "+", stmt.operand, stmt.giving)
             is SubtractStatement -> emitArith(stmt.from, "-", stmt.operand, stmt.giving)
@@ -457,8 +464,10 @@ class JavaTranspiler(
         val lhs = emitRef(target)
         val rhs = emitExpr(operand)
         val dest = if (giving != null) emitRef(giving) else lhs
-        val sym = checker.symbols.resolve(target.parts[0])
-        val kType = (sym as? Symbol.Variable)?.type ?: KobolType.UnknownType
+        // Resolve the full operand type (field chains included) so a record-field
+        // money/decimal operand like `invoice.amount` takes the BigDecimal
+        // arithmetic path, not `+`/`-`. `target` is the lhs operand here.
+        val kType = refType(target)
         if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
             val javOp = when (op) {
                 "+" -> "add"; "-" -> "subtract"; "*" -> "multiply"; "/" -> "divide"
@@ -539,25 +548,7 @@ class JavaTranspiler(
 
         is Reference -> emitRef(expr)
 
-        is BinaryExpr -> {
-            val l = emitExpr(expr.left)
-            val r = emitExpr(expr.right)
-            when (expr.op) {
-                BinaryOp.EQ       -> "($l == $r)"
-                BinaryOp.NEQ      -> "($l != $r)"
-                BinaryOp.LT       -> "($l < $r)"
-                BinaryOp.GT       -> "($l > $r)"
-                BinaryOp.LEQ      -> "($l <= $r)"
-                BinaryOp.GEQ      -> "($l >= $r)"
-                BinaryOp.AND      -> "($l && $r)"
-                BinaryOp.OR       -> "($l || $r)"
-                BinaryOp.ADD      -> "($l + $r)"
-                BinaryOp.SUBTRACT -> "($l - $r)"
-                BinaryOp.MULTIPLY -> "($l * $r)"
-                BinaryOp.DIVIDE   -> "($l / $r)"
-                BinaryOp.POWER    -> "(long)Math.pow((double)$l, (double)$r)"
-            }
-        }
+        is BinaryExpr -> emitBinary(expr)
 
         is UnaryExpr -> when (expr.op) {
             UnaryOp.NEGATE -> "(-${emitExpr(expr.operand)})"
@@ -586,6 +577,102 @@ class JavaTranspiler(
 
         is PipelineExpr  -> emitPipeline(expr)
     }
+
+    /**
+     * Binary operators, type-aware.
+     *
+     * BigDecimal has no `==`/`+`/`-`/`*`/`/` operators in Java, and `==` on it is
+     * reference equality (always wrong for value comparison). When either operand is
+     * a DECIMAL/MONEY value we route to BigDecimal methods, mirroring [emitArith]:
+     *   - comparisons → `compareTo(...)` (scale-insensitive: 1.50 == 1.5), and
+     *   - arithmetic  → `add/subtract/multiply/divide`, honouring the active
+     *     KobolMathContext so WITH PRECISION blocks apply.
+     * Primitive operands keep the plain Java operators.
+     */
+    private fun emitBinary(expr: BinaryExpr): String {
+        val decimal = (expr.op in DECIMAL_OPS) &&
+            (isDecimalExpr(expr.left) || isDecimalExpr(expr.right))
+        if (decimal) return emitDecimalBinary(expr)
+
+        val l = emitExpr(expr.left)
+        val r = emitExpr(expr.right)
+        return when (expr.op) {
+            BinaryOp.EQ       -> "($l == $r)"
+            BinaryOp.NEQ      -> "($l != $r)"
+            BinaryOp.LT       -> "($l < $r)"
+            BinaryOp.GT       -> "($l > $r)"
+            BinaryOp.LEQ      -> "($l <= $r)"
+            BinaryOp.GEQ      -> "($l >= $r)"
+            BinaryOp.AND      -> "($l && $r)"
+            BinaryOp.OR       -> "($l || $r)"
+            BinaryOp.ADD      -> "($l + $r)"
+            BinaryOp.SUBTRACT -> "($l - $r)"
+            BinaryOp.MULTIPLY -> "($l * $r)"
+            BinaryOp.DIVIDE   -> "($l / $r)"
+            BinaryOp.POWER    -> "(long)Math.pow((double)$l, (double)$r)"
+        }
+    }
+
+    /** Emit a BigDecimal-typed binary op. Caller guarantees [expr.op] in [DECIMAL_OPS]. */
+    private fun emitDecimalBinary(expr: BinaryExpr): String {
+        val l = emitAsDecimal(expr.left)
+        val r = emitAsDecimal(expr.right)
+        val mc = "dev.kobol.stdlib.KobolMathContext.current()"
+        return when (expr.op) {
+            BinaryOp.EQ       -> "($l.compareTo($r) == 0)"
+            BinaryOp.NEQ      -> "($l.compareTo($r) != 0)"
+            BinaryOp.LT       -> "($l.compareTo($r) < 0)"
+            BinaryOp.GT       -> "($l.compareTo($r) > 0)"
+            BinaryOp.LEQ      -> "($l.compareTo($r) <= 0)"
+            BinaryOp.GEQ      -> "($l.compareTo($r) >= 0)"
+            BinaryOp.ADD      -> "($mc != null ? $l.add($r, $mc) : $l.add($r))"
+            BinaryOp.SUBTRACT -> "($mc != null ? $l.subtract($r, $mc) : $l.subtract($r))"
+            BinaryOp.MULTIPLY -> "($mc != null ? $l.multiply($r, $mc) : $l.multiply($r))"
+            BinaryOp.DIVIDE   -> "($mc != null ? $l.divide($r, $mc) : $l.divide($r, java.math.RoundingMode.HALF_EVEN))"
+            // BigDecimal.pow takes an int exponent; emit the raw (long) exponent cast to int.
+            BinaryOp.POWER    -> "$l.pow((int)(${emitExpr(expr.right)}))"
+            else -> error("emitDecimalBinary: ${expr.op} not a decimal op")
+        }
+    }
+
+    /** True when [expr]'s static type is a fixed-point decimal (DECIMAL or MONEY). */
+    private fun isDecimalExpr(expr: Expression): Boolean {
+        // A DECIMAL literal already emits as `new BigDecimal(...)`; the checker does
+        // not always tag bare literals, so recognise the literal kind directly.
+        if (expr is Literal && expr.kind == LiteralKind.DECIMAL) return true
+        return when (checker.typeOf(expr)) {
+            is KobolType.DecimalType, is KobolType.MoneyType -> true
+            else -> false
+        }
+    }
+
+    /**
+     * Emit [expr] as a BigDecimal. Decimal-typed exprs pass through; a primitive
+     * operand in a mixed expression (e.g. `balance > 0`) is widened via
+     * `BigDecimal.valueOf(...)` so `.compareTo`/`.add` type-check.
+     */
+    private fun emitAsDecimal(expr: Expression): String {
+        val code = emitExpr(expr)
+        return if (isDecimalExpr(expr)) code else "java.math.BigDecimal.valueOf($code)"
+    }
+
+    /**
+     * Emit [expr] for assignment to a slot of type [target]. When the slot is a
+     * decimal but the value is a primitive numeric (e.g. `total : DECIMAL = 0`),
+     * widen to BigDecimal so the generated Java type-checks — otherwise pass through.
+     */
+    private fun emitExprFor(target: KobolType, expr: Expression): String =
+        if ((target is KobolType.DecimalType || target is KobolType.MoneyType) && !isDecimalExpr(expr))
+            emitAsDecimal(expr)
+        else
+            emitExpr(expr)
+
+    /**
+     * Full static type of a reference, walking any field chain — so a record-field
+     * target like `invoice.amount` resolves to the field's DECIMAL type, not the
+     * record's. O(depth) in the number of `.`-separated parts.
+     */
+    private fun refType(ref: Reference): KobolType = checker.typeOfReference(ref)
 
     private fun emitStringTemplate(expr: StringTemplateExpr): String {
         if (expr.parts.isEmpty()) return "\"\""
@@ -757,6 +844,12 @@ class JavaTranspiler(
     companion object {
         private val MONGO_COMPARISON_OPS = setOf(
             BinaryOp.EQ, BinaryOp.NEQ, BinaryOp.LT, BinaryOp.GT, BinaryOp.LEQ, BinaryOp.GEQ
+        )
+
+        /** Binary ops that need BigDecimal-method emission when operands are decimal. */
+        private val DECIMAL_OPS = setOf(
+            BinaryOp.EQ, BinaryOp.NEQ, BinaryOp.LT, BinaryOp.GT, BinaryOp.LEQ, BinaryOp.GEQ,
+            BinaryOp.ADD, BinaryOp.SUBTRACT, BinaryOp.MULTIPLY, BinaryOp.DIVIDE, BinaryOp.POWER
         )
     }
 }

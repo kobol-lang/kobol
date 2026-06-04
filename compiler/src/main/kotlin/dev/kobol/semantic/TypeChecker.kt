@@ -1016,6 +1016,10 @@ class TypeChecker(
     // Reference resolution helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Type-check a reference, emitting E001/E002 diagnostics for unknown names or
+     * bad field access. Used during the checking phase.
+     */
     private fun resolveRefType(ref: Reference): KobolType {
         val rootName = ref.parts[0]
         val sym = symbols.resolve(rootName)
@@ -1024,40 +1028,58 @@ class TypeChecker(
             error("E001", "Undefined name '${rootName}'${if (suggestion != null) " — $suggestion" else ""}", ref.pos)
             return KobolType.UnknownType
         }
-        var type: KobolType = when (sym) {
-            is Symbol.Variable        -> sym.type
-            is Symbol.Constant        -> sym.type
-            is Symbol.ProcedureSymbol -> sym.returnType ?: KobolType.VoidType
-            is Symbol.RecordSymbol    -> KobolType.RecordRefType(sym.name)
-            is Symbol.VariantSymbol   -> KobolType.VariantRefType(sym.name)
-            is Symbol.NamedCondition  -> KobolType.BooleanType
+        return walkFieldChain(rootSymbolType(sym), ref.parts.drop(1)) { msg ->
+            error("E002", msg, ref.pos)
         }
-        // Field access chain: a.b.c
-        for (field in ref.parts.drop(1)) {
+    }
+
+    /**
+     * Resolve a reference's type by walking its field chain — pure, no diagnostics.
+     * Codegen needs the *field* type of a target like `invoice.amount` (e.g. to know
+     * it is DECIMAL), but must not re-emit errors or depend on checking-phase
+     * memoization. Returns [KobolType.UnknownType] if any step can't be resolved.
+     * O(depth) in the number of `.`-separated parts (always tiny).
+     */
+    fun typeOfReference(ref: Reference): KobolType {
+        val sym = symbols.resolve(ref.parts[0]) ?: return KobolType.UnknownType
+        return walkFieldChain(rootSymbolType(sym), ref.parts.drop(1)) { /* silent */ }
+    }
+
+    /** Static type a root symbol contributes before any field access. */
+    private fun rootSymbolType(sym: Symbol): KobolType = when (sym) {
+        is Symbol.Variable        -> sym.type
+        is Symbol.Constant        -> sym.type
+        is Symbol.ProcedureSymbol -> sym.returnType ?: KobolType.VoidType
+        is Symbol.RecordSymbol    -> KobolType.RecordRefType(sym.name)
+        is Symbol.VariantSymbol   -> KobolType.VariantRefType(sym.name)
+        is Symbol.NamedCondition  -> KobolType.BooleanType
+    }
+
+    /**
+     * Walk a `a.b.c` field chain from [start], invoking [onError] (with the same
+     * message text [resolveRefType] historically produced) when a field can't be
+     * resolved. Shared by the diagnostic ([resolveRefType]) and pure
+     * ([typeOfReference]) entry points so the resolution logic lives in one place.
+     */
+    private inline fun walkFieldChain(
+        start: KobolType,
+        fields: List<String>,
+        onError: (String) -> Unit,
+    ): KobolType {
+        var type = start
+        for (field in fields) {
             type = when (type) {
                 is KobolType.RecordRefType -> {
                     val recSym = symbols.resolve(type.name) as? Symbol.RecordSymbol
-                    if (recSym != null) {
-                        recSym.fields[field]
-                            ?: if (recSym.conditions.containsKey(field)) KobolType.BooleanType
-                               else run {
-                                   error("E002", "Record '${type.name}' has no field '$field'", ref.pos)
-                                   KobolType.UnknownType
-                               }
-                    } else {
-                        error("E002", "Record '${type.name}' has no field '$field'", ref.pos)
-                        KobolType.UnknownType
-                    }
+                    recSym?.fields?.get(field)
+                        ?: if (recSym?.conditions?.containsKey(field) == true) KobolType.BooleanType
+                           else { onError("Record '${type.name}' has no field '$field'"); KobolType.UnknownType }
                 }
-                is KobolType.ListType -> {
+                is KobolType.ListType ->
                     if (field == "LENGTH" || field == "SIZE" || field == "COUNT") KobolType.IntegerType
-                    else { error("E002", "LIST has no field '$field'", ref.pos); KobolType.UnknownType }
-                }
+                    else { onError("LIST has no field '$field'"); KobolType.UnknownType }
                 is KobolType.JavaObjectType -> KobolType.TextType(null)  // e.g. err.message
-                else -> {
-                    error("E002", "Cannot access field '$field' on type $type", ref.pos)
-                    KobolType.UnknownType
-                }
+                else -> { onError("Cannot access field '$field' on type $type"); KobolType.UnknownType }
             }
         }
         return type
