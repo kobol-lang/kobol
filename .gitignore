@@ -1,0 +1,151 @@
+# =============================================================================
+# Kobol — .gitignore
+# =============================================================================
+
+# ----------------------------------------------------------------------------
+# Gradle
+# ----------------------------------------------------------------------------
+.gradle/
+build/
+**/build/
+gradle-app.setting
+.gradletasknamecache
+
+# ----------------------------------------------------------------------------
+# IntelliJ IDEA / Android Studio
+# ----------------------------------------------------------------------------
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+*.class
+
+# ----------------------------------------------------------------------------
+# VS Code
+# ----------------------------------------------------------------------------
+# Anchored to root — does NOT match extension/.vscode/ (that is committed)
+/.vscode/settings.json
+/.vscode/launch.json
+/.vscode/tasks.json
+# Keep extension source; ignore generated/installed artefacts
+extension/node_modules/
+extension/out/
+extension/*.vsix
+# TypeScript incremental build info
+**/*.tsbuildinfo
+# Node debug logs
+npm-debug.log*
+yarn-debug.log*
+
+# ----------------------------------------------------------------------------
+# macOS
+# ----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# ----------------------------------------------------------------------------
+# Linux / Windows
+# ----------------------------------------------------------------------------
+*~
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ----------------------------------------------------------------------------
+# JVM / Kotlin
+# ----------------------------------------------------------------------------
+*.jar
+*.war
+*.ear
+*.class
+# Gradle wrapper jar must be committed — keep it unignored
+!gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+hs_err_pid*
+replay_pid*
+# Kotlin compiler working directory (error logs, daemon metadata)
+.kotlin/
+
+# ----------------------------------------------------------------------------
+# GraalVM native-image agent output
+# keep hand-crafted configs; ignore agent-generated ones
+# ----------------------------------------------------------------------------
+compiler/build/native/
+compiler/src/graalvm/agent-output/
+
+# ----------------------------------------------------------------------------
+# Kobol project-specific
+# ----------------------------------------------------------------------------
+
+# Local environment — NEVER commit; use .env.example instead
+.env
+.env.local
+.env.*.local
+
+# Compiled Kobol output directories produced by `kobol build` / `kobol run`
+out/
+dist/
+
+# Dependency manifest emitted by `kobol build --deps`
+kobol-deps.json
+
+# kobol.lock — version lock file is intentionally committed for reproducible
+# builds; uncomment the line below only if you want to ignore it
+# kobol.lock
+
+# REPL history
+.kobol_history
+
+# Temporary files written by the test suite
+/tmp/kobol-test-*/
+
+# Generated output written by example programs (a FILE declared FOR OUTPUT).
+# The *.csv sample INPUTS under data/ are committed; generated reports are not.
+/data/REPORTFILE.txt
+
+# Stray directory created when a shell fails to expand %TEMP% in an -o path
+# (e.g. `kobol -o "%TEMP%\..."` run under git-bash). Pure build output.
+/%TEMP%/
+
+# Ad-hoc log captures (build-local/run output redirects, hs_err, etc.)
+*.log
+
+# Fat JAR used locally during development (the CI build produces the canonical one)
+kobolc-local.jar
+
+# ----------------------------------------------------------------------------
+# SDKMAN / Homebrew local tap cache
+# ----------------------------------------------------------------------------
+.sdkman/
+
+
+# ----------------------------------------------------------------------------
+# Gradle Plugin Portal (credentials must never be committed)
+# ----------------------------------------------------------------------------
+gradle.publish.key
+gradle.publish.secret
+
+# ----------------------------------------------------------------------------
+# Graphify
+# ----------------------------------------------------------------------------
+graphify-out/
+
+# ----------------------------------------------------------------------------
+# AI tooling / code-graph (local, generated — never commit)
+# ----------------------------------------------------------------------------
+# Code-graph index (symbols.json, cross-module.json — 1MB+ generated)
+.graph/
+# Internal working docs — not published (spec + README are committed)
+docs/ANALYSIS.md
+docs/IMPLEMENTATION_PLAN.md
+TODO.md
+NO-COMMIT.md
+# OpenCode AI assistant local config + plugins
+.opencode/
+# Claude Code local settings (also in global ignore; repeat for fresh clones)
+.claude/settings.local.json

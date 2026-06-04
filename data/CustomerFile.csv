@@ -1,0 +1,8 @@
+customer-id,name,segment,balance,credit-limit,active
+1,Acme Corp,PREMIUM,75000.00,50000.00,true
+2,Globex Ltd,STANDARD,12500.50,20000.00,true
+3,Initech,PREMIUM,68000.00,40000.00,true
+4,Umbrella Inc,STANDARD,5200.00,10000.00,false
+5,Soylent Co,PREMIUM,52000.00,60000.00,true
+6,Hooli,STANDARD,18900.75,15000.00,true
+7,Stark Industries,PREMIUM,99000.00,80000.00,true

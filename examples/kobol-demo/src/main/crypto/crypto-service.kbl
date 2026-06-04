@@ -1,0 +1,59 @@
+PROGRAM crypto-service
+  VERSION "1.0.0"
+
+MODULE demo.crypto:
+  EXPORT PROCEDURE RunDemo
+END-MODULE
+
+NOTE:
+  Crypto service module — Java interop + KobolSecurity stdlib.
+
+  Java interop styles:
+    (a) IMPORT + CALL — preserved-case method name, e.g. LocalDate.now
+    (b) CALL kobol.security.* — stdlib wrapper, always lowercase, all JVM types handled
+END-NOTE
+
+IMPORT java.time.LocalDate
+
+DATA:
+  today       : DATE
+  today-text  : TEXT
+  plain-msg   : TEXT = "Hello from Kobol!"
+  aes-key     : TEXT = "kobol-demo-key!!"
+  encrypted   : TEXT
+  decrypted   : TEXT
+  sha-hash    : TEXT
+  md5-hash    : TEXT
+  b64-encoded : TEXT
+  b64-decoded : TEXT
+
+EXPORT PROCEDURE RunDemo:
+  LOG INFO "Crypto demo starting" WITH msg: plain-msg
+
+  -- (a) Direct Java interop: IMPORT + CALL with original-case method name
+  -- LocalDate.now() is a static method — name "now" all lowercase, works after rawValue fix
+  CALL LocalDate.now GIVING today
+  CALL kobol.date.formatDate USING today, "yyyy-MM-dd" GIVING today-text
+  DISPLAY "  [Java interop] Date via LocalDate.now: " today-text
+
+  -- (b) KobolSecurity stdlib: static methods all lowercase, maps to KobolSecurity.java
+  CALL kobol.security.sha256 USING plain-msg GIVING sha-hash
+  DISPLAY "  SHA-256: " sha-hash
+
+  CALL kobol.security.md5 USING plain-msg GIVING md5-hash
+  DISPLAY "  MD5:     " md5-hash
+
+  CALL kobol.security.encrypt USING plain-msg, aes-key GIVING encrypted
+  DISPLAY "  AES encrypted (base64): " encrypted
+
+  CALL kobol.security.decrypt USING encrypted, aes-key GIVING decrypted
+  DISPLAY "  AES decrypted: " decrypted
+
+  CALL kobol.security.base64enc USING plain-msg GIVING b64-encoded
+  DISPLAY "  Base64 encoded: " b64-encoded
+
+  CALL kobol.security.base64dec USING b64-encoded GIVING b64-decoded
+  DISPLAY "  Base64 decoded: " b64-decoded
+
+  LOG INFO "Crypto demo done"
+END-PROCEDURE

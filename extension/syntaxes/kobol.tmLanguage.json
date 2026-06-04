@@ -1,0 +1,126 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kobol",
+  "scopeName": "source.kobol",
+  "fileTypes": ["kbl"],
+  "patterns": [
+    { "include": "#comment-block" },
+    { "include": "#comment-line" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#boolean-literal" },
+    { "include": "#keyword-end" },
+    { "include": "#keyword-control" },
+    { "include": "#keyword-declaration" },
+    { "include": "#keyword-concurrency" },
+    { "include": "#keyword-io" },
+    { "include": "#keyword-type" },
+    { "include": "#keyword-operator" },
+    { "include": "#keyword-log-level" },
+    { "include": "#keyword-clause" },
+    { "include": "#keyword-condition" },
+    { "include": "#builtin-call" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "comment-line": {
+      "name": "comment.line.double-dash.kobol",
+      "begin": "--",
+      "end": "$",
+      "patterns": [{ "include": "#comment-tag" }]
+    },
+    "comment-block": {
+      "name": "comment.block.note.kobol",
+      "begin": "^\\s*NOTE\\s*:",
+      "end": "^\\s*END-NOTE\\b",
+      "beginCaptures": { "0": { "name": "keyword.control.note.kobol" } },
+      "endCaptures":   { "0": { "name": "keyword.control.note.kobol" } },
+      "patterns": [{ "include": "#comment-tag" }]
+    },
+    "comment-tag": {
+      "name": "keyword.codetag.notation.kobol",
+      "match": "\\b(TODO|FIXME|HACK|XXX)\\b"
+    },
+    "string": {
+      "name": "string.quoted.double.kobol",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "variable.other.interpolated.kobol",
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [{ "include": "$self" }]
+        },
+        {
+          "name": "constant.character.escape.kobol",
+          "match": "\\\\[ntr\"\\\\]"
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.decimal.kobol",
+          "match": "\\b[0-9]+\\.[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.kobol",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "boolean-literal": {
+      "name": "constant.language.boolean.kobol",
+      "match": "\\b(TRUE|FALSE)\\b"
+    },
+    "keyword-end": {
+      "name": "keyword.control.end.kobol",
+      "match": "\\b(END-IF|END-FOR|END-WHILE|END-REPEAT|END-PROCEDURE|END-PROGRAM|END-TRY|END-PERFORM|END-RECORD|END-MATCH|END-VARIANT|END-MODULE|END-TEST|END-SERVER|END-CONCURRENT|END-PRECISION|END-VALIDATE|END-CONFIG)\\b"
+    },
+    "keyword-control": {
+      "name": "keyword.control.kobol",
+      "match": "\\b(IF|ELSE|FOR|EACH|IN|WHILE|REPEAT|TIMES|TRY|ON|ENSURE|STOP|RUN|RETURN|RAISE|MATCH|OTHERWISE|WHEN|WHERE)\\b"
+    },
+    "keyword-declaration": {
+      "name": "keyword.other.declaration.kobol",
+      "match": "\\b(PROGRAM|PROCEDURE|ASYNC|EXPORT|RECORD|FIELDS|DATA|FILES|DEFINE|TYPE|IS|IMPORT|VERSION|AUTHOR|CONDITION|VARIANT|MODULE|TEST|TABLE|CONFIG|SERVER|ENDPOINT|CONCURRENT|PARALLEL)\\b"
+    },
+    "keyword-concurrency": {
+      "name": "keyword.control.concurrency.kobol",
+      "match": "\\b(CONCURRENT|ASYNC|AWAIT|FUTURE|PARALLEL|WAIT|ALL|SCOPE)\\b"
+    },
+    "keyword-io": {
+      "name": "keyword.other.io.kobol",
+      "match": "\\b(READ|WRITE|OPEN|CLOSE|PARSE|DISPLAY|LOG|RESPOND|NOSQL|CACHE|DATABASE|FIND|SAVE|DELETE|COUNT|CONNECT|DISCONNECT)\\b"
+    },
+    "keyword-type": {
+      "name": "support.type.kobol",
+      "match": "\\b(INTEGER|SMALLINT|DECIMAL|MONEY|TEXT|SENSITIVE|BOOLEAN|DATE|TIME|DATETIME|LIST|MAP|OF|UUID|FUTURE)\\b"
+    },
+    "keyword-operator": {
+      "name": "keyword.operator.kobol",
+      "match": "\\b(ADD|SUBTRACT|MULTIPLY|DIVIDE|COMPUTE|ROUND|MOVE|SET|LET|DO|PERFORM|CALL|FILTER|SORT|TAKE|TRANSFORM|SUM|ASSERT|MOCK|SLEEP|VALIDATE|MUST)\\b"
+    },
+    "keyword-log-level": {
+      "name": "support.constant.log-level.kobol",
+      "match": "\\b(TRACE|DEBUG|INFO|WARN|ERROR)\\b"
+    },
+    "keyword-clause": {
+      "name": "keyword.other.clause.kobol",
+      "match": "\\b(GIVING|USING|WITH|FROM|TO|INTO|BY|RETURNING|AND|OR|NOT|AS|PRECISION|DECIMAL128|HALF-UP|HALF-EVEN|HALF-DOWN|CEILING|FLOOR|MILLISECONDS|SECONDS|MINUTES|REQUIRED|DEFAULT|SATISFY|LENGTH|COLUMNS|ROW|HEADERS|BODY|TIMEOUT|PORT|AT|STATUS|PARAMS|EXPIRES)\\b"
+    },
+    "keyword-condition": {
+      "name": "keyword.other.condition.kobol",
+      "match": "\\b(IS|POSITIVE|NEGATIVE|ZERO|EMPTY|BLANK|NOT)\\b"
+    },
+    "builtin-call": {
+      "name": "support.function.builtin.kobol",
+      "match": "\\b(COMBINE|UPPERCASE|LOWERCASE|LENGTH-OF|TRIM|SUBSTRING|CONTAINS|STARTS-WITH|ENDS-WITH|REPLACE|SPLIT|UUID-GENERATE|UUID-FROM-TEXT|FORMAT-DATE|PARSE-DATE|NOW|TODAY|SCALE-OF|PRECISION-OF)\\b"
+    },
+    "identifier": {
+      "name": "variable.other.kobol",
+      "match": "\\b[a-zA-Z][a-zA-Z0-9_-]*\\b"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+PROGRAM T
+DATA:
+  count : INTEGER = 5
+  name  : TEXT    = "demo"
+PROCEDURE Main:
+  LOG INFO "Processed" WITH count: count, label: name
+  DISPLAY "ok"
+  STOP RUN
+END-PROCEDURE

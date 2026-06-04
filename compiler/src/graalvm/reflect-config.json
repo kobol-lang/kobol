@@ -1,0 +1,150 @@
+[
+  {
+    "comment": "Kotlin reflection — KClass.isData, primaryConstructor, etc.",
+    "name": "kotlin.Metadata",
+    "allDeclaredConstructors": true,
+    "allPublicConstructors": true,
+    "allDeclaredMethods": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "comment": "Kotlin stdlib companion objects accessed via reflection",
+    "name": "kotlin.jvm.internal.Reflection",
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "comment": "LSP4J — GSON deserialises protocol messages via reflection",
+    "name": "org.eclipse.lsp4j.InitializeParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.InitializeResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.ServerCapabilities",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.TextDocumentSyncOptions",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.CompletionOptions",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.Diagnostic",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.PublishDiagnosticsParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.Range",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.Position",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.CompletionItem",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.CompletionList",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.HoverParams",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.Hover",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "org.eclipse.lsp4j.MarkupContent",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "comment": "GSON type adapters used by LSP4J's JSON-RPC layer",
+    "name": "com.google.gson.internal.LinkedTreeMap",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "com.google.gson.internal.LinkedHashTreeMap",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "comment": "SLF4J service-loader provider discovery",
+    "name": "org.slf4j.LoggerFactory",
+    "allDeclaredMethods": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "org.slf4j.simple.SimpleLogger",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "comment": "ASM ClassReader/ClassWriter used by AsmEmitter",
+    "name": "org.objectweb.asm.ClassReader",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "org.objectweb.asm.ClassWriter",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "comment": "java.io.File — used in CompilerOptions, ProjectBuilder",
+    "name": "java.io.File",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "comment": "TOML parser reflection on ProjectDescriptor data class",
+    "name": "dev.kobol.project.ProjectDescriptor",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true,
+    "allDeclaredFields": true
+  }
+]

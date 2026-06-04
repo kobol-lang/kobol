@@ -1,0 +1,17 @@
+# Source — only compiled output ships
+src/**
+tsconfig.json
+.vscode/**
+.gitignore
+
+# TypeScript build artifacts not needed at runtime
+out/**/*.map
+
+# Dev dependency lockfile + metadata
+package-lock.json
+.eslintrc*
+**/.eslintrc*
+
+# OS / editor cruft
+.DS_Store
+**/*.log

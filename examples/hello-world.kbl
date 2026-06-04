@@ -1,0 +1,16 @@
+NOTE:
+  Hello World in Kobol — the simplest possible program.
+  Block comments read like English: NOTE: ... END-NOTE.
+END-NOTE
+
+PROGRAM HelloWorld
+  VERSION "1.0"
+
+DATA:
+  greeting : TEXT = "Hello, World!"
+
+PROCEDURE Main:
+  DISPLAY greeting
+  DISPLAY "Welcome to Kobol — a modern COBOL-inspired language."
+  STOP RUN
+END-PROCEDURE

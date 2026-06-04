@@ -1,0 +1,61 @@
+-- Demo test suite
+-- Demonstrates: TEST blocks, ASSERT, TABLE tests
+
+PROGRAM demo-tests
+  VERSION "1.0.0"
+
+DATA:
+  result  : INTEGER = 0
+  balance : MONEY(10.2) = 0
+  label   : TEXT = ""
+
+TEST "arithmetic":
+  COMPUTE result = 10 + 5
+  ASSERT result = 15
+  COMPUTE result = 100 - 37
+  ASSERT result = 63
+  COMPUTE result = 6 * 7
+  ASSERT result = 42
+END-TEST
+
+TEST "money arithmetic":
+  COMPUTE balance = 100.00 + 24.99
+  ASSERT balance = 124.99
+  COMPUTE balance = balance - 9.99
+  ASSERT balance = 115.00
+END-TEST
+
+TEST "string comparison":
+  MOVE "Kobol" TO label
+  ASSERT label = "Kobol"
+  ASSERT label <> ""
+END-TEST
+
+TEST "boolean logic":
+  DATA:
+    price : MONEY(10.2) = 29.99
+    in-stock : BOOLEAN = TRUE
+  ASSERT price > 0
+  ASSERT price < 100.00
+  ASSERT in-stock = TRUE
+  ASSERT NOT in-stock = FALSE
+END-TEST
+
+TEST TABLE "price validation":
+  COLUMNS: amount, expected-valid
+  ROW: 9.99,   TRUE
+  ROW: 0.00,   FALSE
+  ROW: 100.00, TRUE
+  ROW: -1.00,  FALSE
+  WHEN:
+    COMPUTE result = 1
+    IF amount <= 0:
+      COMPUTE result = 0
+    END-IF
+  THEN:
+    IF expected-valid = TRUE:
+      ASSERT result = 1
+    ELSE:
+      ASSERT result = 0
+    END-IF
+END-TEST

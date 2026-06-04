@@ -1,0 +1,15 @@
+# Minimal Alpine image that wraps a pre-built GraalVM native binary.
+# Build context must contain the extracted `kobol` binary at its root.
+#
+#   docker build -f .github/docker/Dockerfile.native-prebuilt -t kobol:native .
+FROM alpine:3.20
+
+# GraalVM native images compiled with musl need no extra libs.
+# Binaries compiled against glibc (default linux runner) need libstdc++/libgcc.
+RUN apk add --no-cache libstdc++ libgcc
+
+COPY kobol /usr/local/bin/kobol
+RUN chmod +x /usr/local/bin/kobol
+
+ENTRYPOINT ["kobol"]
+CMD ["--help"]

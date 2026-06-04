@@ -1,0 +1,16 @@
+# Eclipse Temurin (Adoptium) HotSpot JVM image for Kobol compiler.
+# Build context must contain kobolc-*.jar at its root.
+#
+#   docker build -f .github/docker/Dockerfile.jvm-temurin -t kobol:temurin .
+FROM eclipse-temurin:21-jre
+
+WORKDIR /opt/kobol
+COPY kobolc-*.jar ./kobolc.jar
+
+# Run as non-root
+RUN groupadd -r kobol && useradd -r -g kobol kobol \
+    && chown -R kobol:kobol /opt/kobol
+USER kobol
+
+ENTRYPOINT ["java", "-jar", "/opt/kobol/kobolc.jar"]
+CMD ["--help"]

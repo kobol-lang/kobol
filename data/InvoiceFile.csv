@@ -1,0 +1,7 @@
+invoice-id,customer-name,amount,due-date,paid,status-code
+1001,Acme Corp,1250.00,2026-05-01,true,X
+1002,Globex Ltd,890.50,2026-04-15,false,O
+1003,Initech,4200.75,2026-06-30,false,P
+1004,Umbrella Inc,15000.00,2026-03-20,false,O
+1005,Soylent Co,325.25,2026-07-10,true,X
+1006,Hooli,7800.00,2026-05-25,false,P

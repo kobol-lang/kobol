@@ -1,0 +1,88 @@
+NOTE:
+  Customer Report — demonstrates collections, pipelines, and Java interop.
+  Reads customers from CSV, flags high-value / at-risk accounts, and prints
+  the top 5 by balance.
+END-NOTE
+
+PROGRAM CustomerReport
+  VERSION "1.0"
+
+IMPORT java.time.LocalDate
+IMPORT java.time.format.DateTimeFormatter AS DateFmt
+
+RECORD Customer:
+  customer-id   : INTEGER
+  name          : TEXT(60)
+  segment       : TEXT(10)
+  balance       : MONEY(12.2)
+  credit-limit  : MONEY(12.2)
+  active        : BOOLEAN
+    CONDITION HighValue  WHEN balance > 50000
+    CONDITION AtRisk     WHEN balance > credit-limit
+    CONDITION Premium    WHEN segment = "PREMIUM"
+
+FILES:
+  CustomerFile AS SEQUENTIAL CSV RECORD Customer
+
+DEFINE REPORT-TITLE : TEXT = "Customer Portfolio Report"
+
+DATA:
+  customer-list    : LIST OF Customer
+  today            : DATE
+  report-date-str  : TEXT
+  total-balance    : MONEY(14.2) = 0
+  high-value-count : INTEGER     = 0
+  at-risk-count    : INTEGER     = 0
+
+PROCEDURE Main:
+  CALL LocalDate.now GIVING today
+  CALL DateFmt.ISO_LOCAL_DATE.format USING today GIVING report-date-str
+
+  DISPLAY REPORT-TITLE
+  DISPLAY "Date: " report-date-str
+  DISPLAY ""
+
+  PERFORM LoadCustomers
+  PERFORM AnalysePortfolio
+  PERFORM PrintTopCustomers
+  STOP RUN
+END-PROCEDURE
+
+PROCEDURE LoadCustomers:
+  FOR EACH cust IN CustomerFile:
+    ADD cust TO customer-list
+  END-FOR
+  DISPLAY "Loaded " customer-list.length " customers."
+END-PROCEDURE
+
+PROCEDURE AnalysePortfolio:
+  FOR EACH cust IN customer-list:
+    IF cust.active:
+      ADD cust.balance TO total-balance
+      IF cust.HighValue:
+        ADD 1 TO high-value-count
+      END-IF
+      IF cust.AtRisk:
+        ADD 1 TO at-risk-count
+        DISPLAY "ALERT: Customer " cust.name " is over credit limit!"
+      END-IF
+    END-IF
+  END-FOR
+
+  DISPLAY ""
+  DISPLAY "Portfolio total balance : " total-balance
+  DISPLAY "High-value customers    : " high-value-count
+  DISPLAY "At-risk customers       : " at-risk-count
+END-PROCEDURE
+
+PROCEDURE PrintTopCustomers:
+  DISPLAY ""
+  DISPLAY "--- Top 5 Customers by Balance ---"
+
+  -- FIXME: TAKE 5 is hard-coded; expose as a report parameter
+  COMPUTE top5 = customer-list FILTER WHERE active SORT BY balance DESCENDING TAKE 5
+
+  FOR EACH cust IN top5:
+    DISPLAY cust.customer-id " | " cust.name " | " cust.balance
+  END-FOR
+END-PROCEDURE

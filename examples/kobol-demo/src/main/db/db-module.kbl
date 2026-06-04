@@ -1,0 +1,51 @@
+PROGRAM db-module
+  VERSION "1.0.0"
+
+MODULE demo.db:
+  EXPORT PROCEDURE InitDatabase
+END-MODULE
+
+NOTE:
+  JDBC module — product database.
+  Demonstrates: RECORD, JDBC, TEXT SENSITIVE, VALIDATE multi-constraint,
+  LOG multi-KV, LIST accumulation, FOR EACH over query results.
+END-NOTE
+
+RECORD Product:
+  id       : INTEGER
+  name     : TEXT(60)
+  price    : MONEY(10.2)
+  in-stock : BOOLEAN
+
+DATA:
+  db-user  : TEXT            = "sa"
+  db-pass  : TEXT SENSITIVE  = ""
+  products : LIST OF Product
+
+DEFINE MAX-PRICE : MONEY = 9999.99
+
+EXPORT PROCEDURE InitDatabase USING conn-url : TEXT:
+  LOG INFO "Connecting to database" WITH url: conn-url
+  CALL JDBC.CONNECT USING conn-url USER db-user PASSWORD db-pass
+
+  CALL JDBC.EXECUTE USING "DROP TABLE IF EXISTS products"
+  CALL JDBC.EXECUTE USING "CREATE TABLE products (id INT PRIMARY KEY, name VARCHAR(60), price DECIMAL(10,2), in_stock BOOLEAN)"
+
+  PERFORM InsertProduct USING 1, "Widget",       9.99,  TRUE
+  PERFORM InsertProduct USING 2, "Gadget",       24.99, TRUE
+  PERFORM InsertProduct USING 3, "Doohickey",    4.99,  FALSE
+  PERFORM InsertProduct USING 4, "Thingamajig",  14.99, TRUE
+
+  DISPLAY "  4 products inserted (H2 in-memory DB)"
+  LOG INFO "Database ready" WITH products: 4, table: "products"
+  CALL JDBC.DISCONNECT
+END-PROCEDURE
+
+PROCEDURE InsertProduct USING p-id : INTEGER, p-name : TEXT, p-price : MONEY(10.2), p-stock : BOOLEAN:
+  VALIDATE p-price:
+    MUST BE > 0      FAIL-MSG "Price must be positive"
+    MUST BE <= 9999.99 FAIL-MSG "Price exceeds maximum"
+  END-VALIDATE
+  CALL JDBC.EXECUTE USING "INSERT INTO products VALUES (?, ?, ?, ?)" PARAMS p-id, p-name, p-price, p-stock
+  LOG INFO "Inserted product" WITH id: p-id, name: p-name, price: p-price
+END-PROCEDURE

@@ -1,0 +1,57 @@
+PROGRAM conc-module
+  VERSION "1.0.0"
+
+MODULE demo.concurrency:
+  EXPORT PROCEDURE RunDemo
+END-MODULE
+
+NOTE:
+  Concurrency module.
+  Demonstrates: CONCURRENT block, LIST building, FOR EACH,
+  PARALLEL FOR EACH, LOG multi-KV.
+END-NOTE
+
+DATA:
+  tasks       : LIST OF TEXT
+  task-count  : INTEGER = 0
+
+EXPORT PROCEDURE RunDemo:
+  LOG INFO "Concurrency demo starting"
+
+  -- (1) CONCURRENT: two procedures on JVM virtual threads
+  DISPLAY "  Running FetchOrders + FetchInventory concurrently..."
+  CONCURRENT:
+    PERFORM FetchOrders
+    PERFORM FetchInventory
+  END-CONCURRENT
+  DISPLAY "  Both concurrent tasks finished."
+
+  -- (2) LIST: build task queue
+  ADD "process-invoices"  TO tasks
+  ADD "send-reports"      TO tasks
+  ADD "archive-records"   TO tasks
+  ADD "sync-ledger"       TO tasks
+  COMPUTE task-count = tasks.length
+
+  -- (3) FOR EACH: sequential processing
+  DISPLAY "  Sequential processing " task-count " tasks:"
+  FOR EACH task IN tasks:
+    DISPLAY "    [seq] " task
+  END-FOR
+
+  -- (4) PARALLEL FOR EACH: concurrent item processing
+  DISPLAY "  Parallel processing same " task-count " tasks:"
+  FOR EACH task IN tasks PARALLEL:
+    DISPLAY "    [par] " task
+  END-FOR
+
+  LOG INFO "Concurrency demo done" WITH tasks: task-count
+END-PROCEDURE
+
+PROCEDURE FetchOrders:
+  DISPLAY "    [virtual thread] FetchOrders"
+END-PROCEDURE
+
+PROCEDURE FetchInventory:
+  DISPLAY "    [virtual thread] FetchInventory"
+END-PROCEDURE

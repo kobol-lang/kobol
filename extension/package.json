@@ -1,0 +1,201 @@
+{
+  "name": "kobol-language-support",
+  "displayName": "Kobol Language Support",
+  "description": "Full IDE support for Kobol (.kbl) — syntax highlighting, diagnostics, go-to-definition, hover types, outline, signature help, code actions, inlay hints, folding, and build integration",
+  "version": "0.1.0",
+  "publisher": "kobol-lang",
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Snippets", "Linters", "Formatters"],
+  "keywords": ["kobol", "kbl", "cobol", "jvm", "language-server"],
+  "repository": { "type": "git", "url": "https://github.com/kobol-lang/kobol" },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+
+  "contributes": {
+    "languages": [
+      {
+        "id": "kobol",
+        "aliases": ["Kobol", "kobol", "kbl"],
+        "extensions": [".kbl"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/favicon.svg",
+          "dark":  "./icons/favicon.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kobol",
+        "scopeName": "source.kobol",
+        "path": "./syntaxes/kobol.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "kobol",
+        "path": "./snippets/kobol.code-snippets"
+      }
+    ],
+
+    "commands": [
+      {
+        "command": "kobol.restartServer",
+        "title": "Kobol: Restart Language Server",
+        "category": "Kobol"
+      },
+      {
+        "command": "kobol.showVersion",
+        "title": "Kobol: Show Version",
+        "category": "Kobol"
+      },
+      {
+        "command": "kobol.build",
+        "title": "Kobol: Build Project",
+        "category": "Kobol",
+        "icon": "$(play)"
+      },
+      {
+        "command": "kobol.run",
+        "title": "Kobol: Run Project",
+        "category": "Kobol",
+        "icon": "$(run)"
+      },
+      {
+        "command": "kobol.test",
+        "title": "Kobol: Run Tests",
+        "category": "Kobol",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "kobol.check",
+        "title": "Kobol: Type-Check Only",
+        "category": "Kobol"
+      },
+      {
+        "command": "kobol.clean",
+        "title": "Kobol: Clean Build Output",
+        "category": "Kobol"
+      }
+    ],
+
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "kobol.run",
+          "when": "resourceLangId == kobol",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        { "command": "kobol.build" },
+        { "command": "kobol.run" },
+        { "command": "kobol.test" },
+        { "command": "kobol.check" },
+        { "command": "kobol.clean" },
+        { "command": "kobol.restartServer" },
+        { "command": "kobol.showVersion" }
+      ]
+    },
+
+    "keybindings": [
+      {
+        "command": "kobol.build",
+        "key": "ctrl+shift+b",
+        "when": "resourceLangId == kobol"
+      }
+    ],
+
+    "taskDefinitions": [
+      {
+        "type": "kobol",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "Kobol task to run: build | run | test | check | clean"
+          }
+        }
+      }
+    ],
+
+    "problemMatchers": [
+      {
+        "name": "kobolc",
+        "owner": "kobol",
+        "source": "kobolc",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^(error|warning|info)\\[([A-Z]\\d+)\\]:\\s*(.+)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*-->\\s*(.+?):(\\d+):(\\d+)\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ],
+
+    "configuration": {
+      "title": "Kobol",
+      "properties": {
+        "kobol.kobolcJar": {
+          "type": "string",
+          "default": "",
+          "description": "Path to kobolc.jar. Leave empty to auto-locate compiler/build/libs/kobolc.jar in the workspace."
+        },
+        "kobol.javaExecutable": {
+          "type": "string",
+          "default": "java",
+          "description": "Java executable used to launch the Kobol language server in JVM mode."
+        },
+        "kobol.nativeBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the 'kobol' native binary. Leave empty to auto-download from GitHub Releases."
+        },
+        "kobol.buildTool": {
+          "type": "string",
+          "enum": ["gradle", "kobol-cli", "auto"],
+          "default": "auto",
+          "description": "Build tool used by the Build/Run/Test commands. 'auto' prefers Gradle if build.gradle.kts is present, else kobol CLI."
+        },
+        "kobol.inlayHints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inferred types for LET declarations."
+        },
+        "kobol.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP messages between VS Code and the Kobol language server."
+        }
+      }
+    }
+  },
+
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

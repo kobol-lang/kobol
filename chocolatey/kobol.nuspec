@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>kobol</id>
+    <version>0.1.0</version>
+    <packageSourceUrl>https://github.com/kobol-lang/kobol/tree/main/chocolatey</packageSourceUrl>
+    <owners>kobol-lang</owners>
+
+    <title>Kobol (native compiler)</title>
+    <authors>Vikram G Palakurthi</authors>
+    <projectUrl>https://github.com/kobol-lang/kobol</projectUrl>
+    <projectSourceUrl>https://github.com/kobol-lang/kobol</projectSourceUrl>
+    <docsUrl>https://github.com/kobol-lang/kobol/blob/main/README.md</docsUrl>
+    <bugTrackerUrl>https://github.com/kobol-lang/kobol/issues</bugTrackerUrl>
+    <iconUrl>https://raw.githubusercontent.com/kobol-lang/kobol/main/assets/logo-128.png</iconUrl>
+    <licenseUrl>https://github.com/kobol-lang/kobol/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>2026 Vikram G Palakurthi</copyright>
+
+    <tags>kobol cobol jvm compiler programming-language native graalvm</tags>
+    <summary>A modern COBOL-inspired language for the JVM.</summary>
+    <description>
+Kobol is a modern, COBOL-inspired programming language for the JVM. It keeps the
+business-logic clarity of COBOL while adding first-class types, fixed-point decimals,
+pattern matching, concurrency, built-in testing, and an HTTP server — compiled to a
+standalone native binary (no JVM required at runtime).
+
+This package installs the `kobol` native compiler CLI on Windows (x64) and adds it
+to your PATH via a Chocolatey shim.
+
+After install:
+
+    kobol --version
+    kobol new my-project
+    cd my-project
+    kobol run
+    </description>
+    <releaseNotes>https://github.com/kobol-lang/kobol/releases/tag/v0.1.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

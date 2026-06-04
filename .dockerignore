@@ -1,0 +1,76 @@
+# Gradle build outputs
+build/
+.gradle/
+.kotlin/
+
+# IDE directories
+.idea/
+*.iml
+out/
+
+# Per-project build directories
+compiler/build/
+runtime/build/
+stdlib/build/
+extension/node_modules/
+extension/out/
+extension/*.vsix
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Not needed to build :compiler (the Dockerfile COPYs only gradlew*, the root
+# gradle scripts, gradle/, compiler/, runtime/, stdlib/, kobol-gradle-plugin/).
+# Excluding the rest keeps the build context small — .git/ especially.
+# ---------------------------------------------------------------------------
+.git
+.github/
+.vscode/
+.opencode/
+examples/
+extension/
+data/
+docs/
+scripts/
+Formula/
+winget/
+graphify-out/
+%TEMP%/
+
+# Local tooling, logs, env
+*.log
+*.md
+.env
+.env.*
+build-local.bat
+test-local.bat
+
+# ---------------------------------------------------------------------------
+# Secrets — NEVER ship to the Docker build context
+# ---------------------------------------------------------------------------
+gradle.publish.key
+gradle.publish.secret
+.sdkman/
+
+# ---------------------------------------------------------------------------
+# AI tooling / code-graph (local, generated)
+# ---------------------------------------------------------------------------
+.graph/
+.claude/
+
+# ---------------------------------------------------------------------------
+# Packaging + assets not needed to build :compiler
+# ---------------------------------------------------------------------------
+chocolatey/
+assets/
+
+# ---------------------------------------------------------------------------
+# Stray local artifacts
+# ---------------------------------------------------------------------------
+*.jar
+# Gradle wrapper jar is required by ./gradlew inside the build — keep it
+!gradle/wrapper/gradle-wrapper.jar
+kobol-deps.json
+.kobol_history

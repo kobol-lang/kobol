@@ -1,0 +1,41 @@
+{
+  "comments": {
+    "lineComment": "--",
+    "blockComment": ["NOTE:", "END-NOTE"]
+  },
+  "brackets": [
+    ["[", "]"],
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "(", "close": ")" },
+    { "open": "[", "close": "]" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] }
+  ],
+  "surroundingPairs": [
+    ["(", ")"],
+    ["[", "]"],
+    ["\"", "\""]
+  ],
+  "wordPattern": "[a-zA-Z][a-zA-Z0-9_-]*",
+  "indentationRules": {
+    "increaseIndentPattern": ":\\s*(--.*)?$",
+    "decreaseIndentPattern": "^\\s*(END-IF|END-FOR|END-WHILE|END-REPEAT|END-PROCEDURE|END-PROGRAM|END-TRY|END-RECORD|END-PERFORM|END-MATCH|END-VARIANT|END-MODULE|END-TEST|END-SERVER|END-CONCURRENT|END-PRECISION|END-VALIDATE|END-CONFIG|ELSE|ON\\s+|ENSURE|OTHERWISE)\\b"
+  },
+  "onEnterRules": [
+    {
+      "beforeText": ":\\s*(--.*)?$",
+      "action": { "indent": "indent" }
+    },
+    {
+      "beforeText": "^\\s*(END-|ELSE|ON\\s+|ENSURE|OTHERWISE)",
+      "action": { "indent": "outdent" }
+    }
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*(PROCEDURE|IF|FOR|WHILE|TRY|MATCH|RECORD|VARIANT|MODULE|TEST|SERVER|CONCURRENT|WITH PRECISION|VALIDATE|CONFIG)\\b",
+      "end": "^\\s*END-(PROCEDURE|IF|FOR|WHILE|TRY|MATCH|RECORD|VARIANT|MODULE|TEST|SERVER|CONCURRENT|PRECISION|VALIDATE|CONFIG)\\b"
+    }
+  }
+}

@@ -1,0 +1,417 @@
+{
+  "Kobol Program": {
+    "prefix": "prog",
+    "body": [
+      "PROGRAM ${1:ProgramName} VERSION \"${2:1.0}\"",
+      "",
+      "DATA:",
+      "  ${3:-- add data items here}",
+      "",
+      "PROCEDURE Main:",
+      "  ${0:-- program body}",
+      "  STOP RUN",
+      "END-PROCEDURE"
+    ],
+    "description": "Full Kobol program scaffold"
+  },
+  "Library Program": {
+    "prefix": "progl",
+    "body": [
+      "MODULE ${1:org.example.lib} VERSION \"${2:1.0}\":",
+      "  EXPORT PROCEDURE ${3:MyProc}",
+      "END-MODULE",
+      "",
+      "PROGRAM ${4:LibName} VERSION \"${2:1.0}\"",
+      "",
+      "EXPORT PROCEDURE ${3:MyProc} USING ${5:param} : ${6:TEXT} RETURNING ${7:TEXT}:",
+      "  ${0:-- body}",
+      "END-PROCEDURE"
+    ],
+    "description": "Library program with MODULE/EXPORT"
+  },
+  "Procedure": {
+    "prefix": "proc",
+    "body": [
+      "PROCEDURE ${1:Name}:",
+      "  ${0:-- body}",
+      "END-PROCEDURE"
+    ],
+    "description": "Procedure without parameters"
+  },
+  "Procedure with Parameters": {
+    "prefix": "procp",
+    "body": [
+      "PROCEDURE ${1:Name} USING ${2:param} : ${3:INTEGER} RETURNING ${4:INTEGER}:",
+      "  ${0:-- body}",
+      "END-PROCEDURE"
+    ],
+    "description": "Procedure with parameters and return type"
+  },
+  "Async Procedure": {
+    "prefix": "aproc",
+    "body": [
+      "ASYNC PROCEDURE ${1:Name} USING ${2:param} : ${3:TEXT}:",
+      "  ${0:-- async body}",
+      "END-PROCEDURE"
+    ],
+    "description": "Async procedure (runs on virtual thread)"
+  },
+  "Record": {
+    "prefix": "rec",
+    "body": [
+      "RECORD ${1:RecordName}:",
+      "  ${2:field-name} : ${3:TEXT}",
+      "  ${0}"
+    ],
+    "description": "Record type definition"
+  },
+  "NOTE block comment": {
+    "prefix": "note",
+    "body": [
+      "NOTE:",
+      "  ${0:free-text description}",
+      "END-NOTE"
+    ],
+    "description": "NOTE: … END-NOTE block comment"
+  },
+  "Variant Type": {
+    "prefix": "variant",
+    "body": [
+      "VARIANT ${1:TypeName} IS",
+      "  ${2:Case1} |",
+      "  ${3:Case2} WITH",
+      "    ${4:field} : ${5:TEXT}",
+      "END-VARIANT"
+    ],
+    "description": "Sealed variant type"
+  },
+  "DEFINE TYPE alias": {
+    "prefix": "deftype",
+    "body": ["DEFINE TYPE ${1:AliasName} IS ${2:DECIMAL(18, 8)}"],
+    "description": "Type alias declaration"
+  },
+  "MODULE declaration": {
+    "prefix": "module",
+    "body": [
+      "MODULE ${1:org.example.module} VERSION \"${2:1.0}\":",
+      "  EXPORT PROCEDURE ${3:MyProc}",
+      "END-MODULE"
+    ],
+    "description": "MODULE declaration block"
+  },
+  "IMPORT statement": {
+    "prefix": "import",
+    "body": ["IMPORT ${1:org.example.module} VERSION \"${2:1.0}\""],
+    "description": "IMPORT a module"
+  },
+  "IF / END-IF": {
+    "prefix": "iff",
+    "body": [
+      "IF ${1:condition}:",
+      "  ${0}",
+      "END-IF"
+    ],
+    "description": "IF block"
+  },
+  "IF / ELSE / END-IF": {
+    "prefix": "ife",
+    "body": [
+      "IF ${1:condition}:",
+      "  ${2}",
+      "ELSE:",
+      "  ${0}",
+      "END-IF"
+    ],
+    "description": "IF/ELSE block"
+  },
+  "FOR EACH": {
+    "prefix": "fore",
+    "body": [
+      "FOR EACH ${1:item} IN ${2:collection}:",
+      "  ${0}",
+      "END-FOR"
+    ],
+    "description": "FOR EACH loop"
+  },
+  "WHILE loop": {
+    "prefix": "while",
+    "body": [
+      "WHILE ${1:condition}:",
+      "  ${0}",
+      "END-WHILE"
+    ],
+    "description": "WHILE loop"
+  },
+  "TRY / ON": {
+    "prefix": "try",
+    "body": [
+      "TRY:",
+      "  ${1}",
+      "ON ${2:FileError}:",
+      "  ${0}",
+      "END-TRY"
+    ],
+    "description": "TRY/ON exception handler"
+  },
+  "TRY / ON / ENSURE": {
+    "prefix": "trye",
+    "body": [
+      "TRY:",
+      "  ${1}",
+      "ON ${2:FileError}:",
+      "  ${3}",
+      "ENSURE:",
+      "  ${0}",
+      "END-TRY"
+    ],
+    "description": "TRY/ON/ENSURE with cleanup"
+  },
+  "MATCH pattern": {
+    "prefix": "match",
+    "body": [
+      "MATCH ${1:subject}:",
+      "  WHEN ${2:pattern}:",
+      "    ${3}",
+      "  OTHERWISE:",
+      "    ${0}",
+      "END-MATCH"
+    ],
+    "description": "MATCH pattern matching"
+  },
+  "MATCH range pattern": {
+    "prefix": "matchr",
+    "body": [
+      "MATCH ${1:value}:",
+      "  WHEN ${2:1}..${3:100}:",
+      "    ${4}",
+      "  WHEN ${5:101}..${6:999}:",
+      "    ${7}",
+      "  OTHERWISE:",
+      "    ${0}",
+      "END-MATCH"
+    ],
+    "description": "MATCH with range patterns"
+  },
+  "MATCH guard": {
+    "prefix": "matchg",
+    "body": [
+      "MATCH ${1:value}:",
+      "  WHEN ${2:pattern} IF ${3:condition}:",
+      "    ${4}",
+      "  OTHERWISE:",
+      "    ${0}",
+      "END-MATCH"
+    ],
+    "description": "MATCH with guard condition"
+  },
+  "CONCURRENT block": {
+    "prefix": "concurrent",
+    "body": [
+      "CONCURRENT:",
+      "  DO ${1:ProcA}",
+      "  DO ${2:ProcB}",
+      "  WAIT ALL",
+      "END-CONCURRENT"
+    ],
+    "description": "CONCURRENT virtual-thread block"
+  },
+  "LOG statement": {
+    "prefix": "log",
+    "body": ["LOG ${1|INFO,DEBUG,WARN,ERROR,TRACE|} \"${0:message}\""],
+    "description": "Structured log statement (SLF4J)"
+  },
+  "LOG with context": {
+    "prefix": "logw",
+    "body": [
+      "LOG ${1|INFO,DEBUG,WARN,ERROR|} \"${2:message}\" WITH",
+      "  ${3:key}: ${4:value}"
+    ],
+    "description": "LOG with key/value context pairs"
+  },
+  "VALIDATE block": {
+    "prefix": "validate",
+    "body": [
+      "VALIDATE ${1:target}:",
+      "  MUST NOT BE EMPTY",
+      "  MUST LENGTH >= ${0:1}",
+      "END-VALIDATE"
+    ],
+    "description": "VALIDATE constraints block"
+  },
+  "CONFIG section": {
+    "prefix": "config",
+    "body": [
+      "CONFIG:",
+      "  ${1:setting-name} : ${2:TEXT} FROM ENV \"${3:MY_VAR}\" REQUIRED",
+      "  ${0}",
+      "END-CONFIG"
+    ],
+    "description": "Environment-variable-backed CONFIG section"
+  },
+  "DATA section": {
+    "prefix": "data",
+    "body": [
+      "DATA:",
+      "  ${1:var-name} : ${2:INTEGER} = ${0:0}"
+    ],
+    "description": "DATA section with a variable"
+  },
+  "TEST block": {
+    "prefix": "test",
+    "body": [
+      "TEST \"${1:test description}\":",
+      "  ${2:-- setup}",
+      "  ASSERT ${0:condition}",
+      "END-TEST"
+    ],
+    "description": "Unit TEST block"
+  },
+  "TEST TABLE": {
+    "prefix": "testtable",
+    "body": [
+      "TEST TABLE \"${1:test name}\":",
+      "  COLUMNS: ${2:a}, ${3:b}, ${4:expected}",
+      "  ROW: ${5:1}, ${6:2}, ${7:3}",
+      "  WHEN:",
+      "    ${8:-- action}",
+      "  THEN:",
+      "    ASSERT ${0:result} = ${4:expected}",
+      "END-TEST"
+    ],
+    "description": "Table-driven TEST block"
+  },
+  "MOCK statement": {
+    "prefix": "mock",
+    "body": ["MOCK ${1:ProcedureName} RETURNS ${0:value}"],
+    "description": "MOCK a procedure in a TEST block"
+  },
+  "SERVER block": {
+    "prefix": "server",
+    "body": [
+      "SERVER AT PORT ${1:8080}:",
+      "  ENDPOINT ${2|GET,POST,PUT,DELETE|} \"${3:/path}\":",
+      "    ${4:-- handle request}",
+      "    RESPOND WITH \"${0:OK}\" AS JSON",
+      "END-SERVER"
+    ],
+    "description": "HTTP SERVER block (Javalin)"
+  },
+  "ENDPOINT handler": {
+    "prefix": "endpoint",
+    "body": [
+      "ENDPOINT ${1|GET,POST,PUT,DELETE,PATCH|} \"${2:/path}\":",
+      "  ${0:-- handle request}",
+      "  RESPOND WITH \"OK\" AS JSON"
+    ],
+    "description": "HTTP ENDPOINT handler"
+  },
+  "SLEEP statement": {
+    "prefix": "sleep",
+    "body": ["SLEEP ${1:100} ${2|MILLISECONDS,SECONDS,MINUTES|}"],
+    "description": "SLEEP for a duration"
+  },
+  "WITH PRECISION block": {
+    "prefix": "precision",
+    "body": [
+      "WITH PRECISION DECIMAL128:",
+      "  ${0:-- high-precision arithmetic}",
+      "END-PRECISION"
+    ],
+    "description": "High-precision arithmetic block"
+  },
+  "COMPUTE": {
+    "prefix": "comp",
+    "body": ["COMPUTE ${1:result} = ${0:expression}"],
+    "description": "COMPUTE assignment"
+  },
+  "MOVE": {
+    "prefix": "move",
+    "body": ["MOVE ${1:value} TO ${0:target}"],
+    "description": "MOVE value to variable"
+  },
+  "DISPLAY": {
+    "prefix": "disp",
+    "body": ["DISPLAY ${0:\"message\"}"],
+    "description": "DISPLAY statement"
+  },
+  "PERFORM": {
+    "prefix": "perf",
+    "body": ["PERFORM ${0:ProcedureName}"],
+    "description": "PERFORM (call) a procedure"
+  },
+  "PERFORM USING": {
+    "prefix": "perfu",
+    "body": ["PERFORM ${1:ProcedureName} USING ${0:arg}"],
+    "description": "PERFORM with arguments"
+  },
+  "PERFORM GIVING": {
+    "prefix": "perfg",
+    "body": ["PERFORM ${1:ProcedureName} USING ${2:arg} GIVING ${0:result}"],
+    "description": "PERFORM with arguments and result"
+  },
+  "LET (type-inferred)": {
+    "prefix": "let",
+    "body": ["LET ${1:name} = ${0:expression}"],
+    "description": "LET with inferred type"
+  },
+  "LET (typed)": {
+    "prefix": "lett",
+    "body": ["LET ${1:name} : ${2:INTEGER} = ${0:0}"],
+    "description": "LET with explicit type annotation"
+  },
+  "CONDITION declaration": {
+    "prefix": "cond",
+    "body": ["CONDITION ${1:Is-Valid} WHEN ${0:condition}"],
+    "description": "Named CONDITION declaration"
+  },
+  "Pipeline": {
+    "prefix": "pipe",
+    "body": [
+      "COMPUTE ${1:result} = ${2:collection}",
+      "  FILTER WHERE ${3:condition}",
+      "  SORT BY ${4:field}",
+      "  TAKE ${0:10}"
+    ],
+    "description": "Collection pipeline (FILTER → SORT → TAKE)"
+  },
+  "CALL HTTP GET": {
+    "prefix": "httpget",
+    "body": [
+      "CALL http.GET USING ${1:url}",
+      "  HEADERS \"${2:Authorization: Bearer token}\"",
+      "  TIMEOUT ${3:30}",
+      "  GIVING ${0:response}"
+    ],
+    "description": "HTTP GET request"
+  },
+  "CALL HTTP POST": {
+    "prefix": "httppost",
+    "body": [
+      "CALL http.POST USING ${1:url}",
+      "  BODY ${2:payload}",
+      "  HEADERS \"${3:Content-Type: application/json}\"",
+      "  GIVING ${0:response}"
+    ],
+    "description": "HTTP POST request"
+  },
+  "PARSE JSON": {
+    "prefix": "parsejson",
+    "body": ["PARSE JSON ${1:data} INTO ${2:target} AS ${0:TypeName}"],
+    "description": "Parse JSON into a typed record"
+  },
+  "WRITE JSON": {
+    "prefix": "writejson",
+    "body": ["WRITE JSON ${1:value} TO \"${0:output.json}\" PRETTY"],
+    "description": "Write value as JSON to file"
+  },
+  "CALL JDBC query": {
+    "prefix": "jdbcq",
+    "body": [
+      "CALL jdbc.query USING \"${1:SELECT * FROM table WHERE id = ?}\"",
+      "  PARAMS ${2:id}",
+      "  INTO ${3:result}",
+      "  AS LIST OF ${0:TypeName}"
+    ],
+    "description": "JDBC parameterised query"
+  }
+}

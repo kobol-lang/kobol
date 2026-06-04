@@ -1,0 +1,28 @@
+VERIFICATION
+
+Verification is intended to assist the Chocolatey moderators and users in
+verifying that this package's contents are authentic.
+
+This package downloads the Kobol native compiler binary at install time from the
+official GitHub Releases of the Kobol project:
+
+  https://github.com/kobol-lang/kobol/releases
+
+The Windows asset is:
+
+  kobol-windows-x86_64.zip   (contains kobol.exe)
+
+To verify the download:
+
+  1. Download the asset from the release tag matching this package version, e.g.
+     https://github.com/kobol-lang/kobol/releases/download/v0.1.0/kobol-windows-x86_64.zip
+
+  2. Compute its SHA-256 checksum:
+        Get-FileHash kobol-windows-x86_64.zip -Algorithm SHA256
+
+  3. Compare against the value in SHA256SUMS.txt attached to the same release,
+     and against the `checksum64` value in tools\chocolateyinstall.ps1.
+
+The Kobol project is licensed under Apache-2.0:
+
+  https://github.com/kobol-lang/kobol/blob/main/LICENSE

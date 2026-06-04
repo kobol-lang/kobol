@@ -1,0 +1,24 @@
+# Eclipse OpenJ9 / IBM Semeru JVM image for Kobol compiler.
+# Build context must contain kobolc-*.jar at its root.
+# Uses shared class cache (-Xshareclasses) to improve cold-start time.
+#
+#   docker build -f .github/docker/Dockerfile.jvm-openj9 -t kobol:openj9 .
+FROM ibm-semeru-runtimes:open-21-jre
+
+WORKDIR /opt/kobol
+
+# Shared Class Cache directory — must be writable at container start-up
+RUN mkdir -p /opt/kobol/.scc
+
+COPY kobolc-*.jar ./kobolc.jar
+
+# Run as non-root
+RUN groupadd -r kobol && useradd -r -g kobol kobol \
+    && chown -R kobol:kobol /opt/kobol
+USER kobol
+
+# -Xshareclasses: populate the SCC on first run, reuse on subsequent runs
+ENTRYPOINT ["java", \
+            "-Xshareclasses:cacheDir=/opt/kobol/.scc,name=kobol", \
+            "-jar", "/opt/kobol/kobolc.jar"]
+CMD ["--help"]

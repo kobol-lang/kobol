@@ -1,0 +1,20 @@
+[project]
+name        = "kobol-demo"
+version     = "1.0.0"
+description = "Full-featured Kobol demo: multi-module, JDBC, concurrency, REST API"
+main        = "kobol-demo"
+
+[build]
+source-dir  = "src/main"
+test-dir    = "src/test"
+output-dir  = "build"
+java-target = "21"
+fat-jar     = true
+
+# Dependencies are resolved automatically by `kobol build`.
+# Cached in ~/.kobol/cache/ after first download.
+[dependencies]
+"com.h2database:h2" = "2.2.224"
+
+[server]
+port = 8080

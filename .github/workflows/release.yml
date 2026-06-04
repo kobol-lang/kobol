@@ -1,0 +1,509 @@
+# =============================================================================
+# release.yml — Build native binaries for all platforms and publish a release
+#
+# Trigger: push of a version tag  (v0.1.0, v1.2.3, etc.)
+# =============================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: write        # create GitHub Release and upload assets
+  packages: write        # push Docker images to GHCR
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/kobol
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Run tests on all three JVM families before building release artifacts
+  # ---------------------------------------------------------------------------
+  test:
+    name: Preflight tests (${{ matrix.jvm }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - jvm: graalvm
+          - jvm: temurin
+          - jvm: openj9
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GraalVM JDK 21
+        if: matrix.jvm == 'graalvm'
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "21"
+          distribution: "graalvm-community"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Eclipse Temurin JDK 21
+        if: matrix.jvm == 'temurin'
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Set up IBM Semeru (OpenJ9) JDK 21
+        if: matrix.jvm == 'openj9'
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "semeru"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ matrix.jvm }}-ubuntu-${{ hashFiles('**/*.gradle.kts') }}
+
+      - run: chmod +x gradlew
+      - run: ./gradlew test --no-daemon
+
+  # ---------------------------------------------------------------------------
+  # 2. Build the cross-platform fat JAR (runs on any JVM 21+)
+  # ---------------------------------------------------------------------------
+  fat-jar:
+    name: Fat JAR
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Eclipse Temurin JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-temurin-ubuntu-${{ hashFiles('**/*.gradle.kts') }}
+
+      - run: chmod +x gradlew
+      - run: ./gradlew :compiler:jar --no-daemon
+
+      - name: Rename JAR with version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp compiler/build/libs/kobolc.jar "kobolc-${VERSION}.jar"
+
+      - name: Upload fat JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fat-jar
+          path: kobolc-*.jar
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # 3. Build native binaries — one job per target platform
+  # ---------------------------------------------------------------------------
+  native:
+    name: Native binary (${{ matrix.name }})
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name:       macos-arm64
+            runner:     macos-latest
+            asset_name: kobol-macos-arm64
+
+          - name:       macos-x86_64
+            runner:     macos-13
+            asset_name: kobol-macos-x86_64
+
+          - name:       linux-x86_64
+            runner:     ubuntu-latest
+            asset_name: kobol-linux-x86_64
+
+          - name:       linux-aarch64
+            runner:     ubuntu-24.04-arm
+            asset_name: kobol-linux-aarch64
+
+          - name:       windows-x86_64
+            runner:     windows-latest
+            asset_name: kobol-windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GraalVM JDK 21
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "21"
+          distribution: "graalvm-community"
+          native-image-job-reports: "true"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.gradle.kts') }}
+
+      - name: Make gradlew executable (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x gradlew
+
+      - name: Build native image
+        run: ./gradlew :compiler:nativeCompile --no-daemon
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd compiler/build/native/nativeCompile
+          tar -czf "${{ matrix.asset_name }}.tar.gz" kobol
+          mv "${{ matrix.asset_name }}.tar.gz" "${{ github.workspace }}/"
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "compiler\build\native\nativeCompile\kobol.exe" `
+            -DestinationPath "${{ matrix.asset_name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # 4. Create GitHub Release and attach all artifacts
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [native, fat-jar]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Flatten dist directory
+        run: find dist/ -type f -exec mv {} dist/ \;
+
+      - name: Compute SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip *.jar 2>/dev/null > SHA256SUMS.txt || \
+            shasum -a 256 *.tar.gz *.zip *.jar > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Extract tag name
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Kobol ${{ steps.tag.outputs.version }}"
+          body: |
+            ## Kobol ${{ steps.tag.outputs.version }}
+
+            ### Installation
+
+            **macOS (Homebrew)**
+            ```bash
+            brew tap kobol-lang/tap
+            brew install kobol
+            ```
+
+            **Linux / macOS (native binary — no JVM required)**
+            ```bash
+            # Replace <platform> with macos-arm64, macos-x86_64, linux-x86_64, or linux-aarch64
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/kobol-<platform>.tar.gz | tar xz
+            sudo mv kobol /usr/local/bin/
+            ```
+
+            **Fat JAR (any JVM 21+ — Temurin, OpenJ9, GraalVM, Corretto, Zulu…)**
+            ```bash
+            curl -fsSL -O https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/kobolc-${{ steps.tag.outputs.version }}.jar
+            java -jar kobolc-${{ steps.tag.outputs.version }}.jar --version
+            # Optional: alias for convenience
+            alias kobol="java -jar /path/to/kobolc-${{ steps.tag.outputs.version }}.jar"
+            ```
+
+            **Windows (Chocolatey)**
+            ```powershell
+            choco install kobol
+            ```
+            > `winget install kobol-lang.kobol` — coming soon.
+
+            **Docker**
+            ```bash
+            # GraalVM native binary (fastest startup, no JVM inside container)
+            docker pull ghcr.io/kobol-lang/kobol:${{ steps.tag.outputs.version }}
+
+            # Eclipse Temurin / Adoptium HotSpot JVM
+            docker pull ghcr.io/kobol-lang/kobol:${{ steps.tag.outputs.version }}-temurin
+
+            # Eclipse OpenJ9 / IBM Semeru (lower heap usage)
+            docker pull ghcr.io/kobol-lang/kobol:${{ steps.tag.outputs.version }}-openj9
+            ```
+
+            **SDKMAN** — coming soon.
+
+            ### Checksums
+            See `SHA256SUMS.txt` in the release assets.
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.jar
+            dist/SHA256SUMS.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # ---------------------------------------------------------------------------
+  # 5. Build and push Docker images to GHCR
+  #    :latest / :<version> / :<version>-native  → GraalVM native binary
+  #    :<version>-temurin                         → Eclipse Temurin HotSpot JVM
+  #    :<version>-openj9                          → Eclipse OpenJ9 / IBM Semeru
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Docker images
+    needs: [native, fat-jar]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux x86_64 native binary
+        uses: actions/download-artifact@v4
+        with:
+          name: kobol-linux-x86_64
+          path: dist-native/
+
+      - name: Download fat JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: fat-jar
+          path: dist-jar/
+
+      - name: Extract native binary
+        run: |
+          tar -xzf dist-native/kobol-linux-x86_64.tar.gz -C dist-native/
+          chmod +x dist-native/kobol
+
+      - name: Extract tag name
+        id: tag
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Native image (default tags) ────────────────────────────────────────
+      - name: Build and push native image
+        uses: docker/build-push-action@v6
+        with:
+          context: dist-native/
+          file: .github/docker/Dockerfile.native-prebuilt
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.version }}-native
+
+      # ── Temurin JVM image ──────────────────────────────────────────────────
+      - name: Build and push Temurin image
+        uses: docker/build-push-action@v6
+        with:
+          context: dist-jar/
+          file: .github/docker/Dockerfile.jvm-temurin
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.version }}-temurin
+            ${{ env.IMAGE }}:temurin
+
+      # ── OpenJ9 JVM image ───────────────────────────────────────────────────
+      - name: Build and push OpenJ9 image
+        uses: docker/build-push-action@v6
+        with:
+          context: dist-jar/
+          file: .github/docker/Dockerfile.jvm-openj9
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.version }}-openj9
+            ${{ env.IMAGE }}:openj9
+
+  # ---------------------------------------------------------------------------
+  # 6. Bump the Homebrew formula in the tap and push it
+  #    Fills the PLACEHOLDER_* digests from SHA256SUMS.txt, bumps the version,
+  #    and pushes Formula/kobol.rb to kobol-lang/homebrew-tap.
+  #    Requires secret: HOMEBREW_TAP_TOKEN (PAT with `repo` scope on the tap).
+  # ---------------------------------------------------------------------------
+  homebrew:
+    name: Bump Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-') }}   # skip pre-releases
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download checksums from the release
+        run: |
+          curl -fsSL -o SHA256SUMS.txt \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/SHA256SUMS.txt"
+
+      - name: Render formula with real digests
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sha() { grep -E " \*?$1\$" SHA256SUMS.txt | awk '{print $1}'; }
+          f=Formula/kobol.rb
+          sed -i \
+            -e "s/version \".*\"/version \"$VERSION\"/" \
+            -e "s/PLACEHOLDER_MACOS_ARM64_SHA256/$(sha kobol-macos-arm64.tar.gz)/" \
+            -e "s/PLACEHOLDER_MACOS_X86_64_SHA256/$(sha kobol-macos-x86_64.tar.gz)/" \
+            -e "s/PLACEHOLDER_LINUX_AARCH64_SHA256/$(sha kobol-linux-aarch64.tar.gz)/" \
+            -e "s/PLACEHOLDER_LINUX_X86_64_SHA256/$(sha kobol-linux-x86_64.tar.gz)/" \
+            "$f"
+          echo "----- rendered formula -----"
+          cat "$f"
+
+      - name: Push to tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: env.TAP_TOKEN != ''
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/kobol-lang/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp Formula/kobol.rb tap/Formula/kobol.rb
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/kobol.rb
+          git commit -m "kobol ${VERSION}"
+          git push
+
+  # ---------------------------------------------------------------------------
+  # 7. Build and publish the Chocolatey package (Windows x64)
+  #    Stamps the version + the windows zip's SHA-256 into the package, packs,
+  #    and pushes to the Chocolatey community feed.
+  #    Requires secret: CHOCO_API_KEY (push token from chocolatey.org).
+  # ---------------------------------------------------------------------------
+  chocolatey:
+    name: Publish Chocolatey package
+    needs: [native, release]
+    runs-on: windows-latest
+    if: ${{ !contains(github.ref_name, '-') }}   # skip pre-releases
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows native asset
+        uses: actions/download-artifact@v4
+        with:
+          name: kobol-windows-x86_64
+          path: dist-win
+
+      - name: Stamp version + checksum into package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $hash = (Get-FileHash dist-win/kobol-windows-x86_64.zip -Algorithm SHA256).Hash.ToLower()
+          (Get-Content chocolatey/kobol.nuspec) `
+            -replace '<version>.*?</version>', "<version>$version</version>" |
+            Set-Content chocolatey/kobol.nuspec
+          (Get-Content chocolatey/tools/chocolateyinstall.ps1) `
+            -replace 'PLACEHOLDER_WINDOWS_X86_64_SHA256', $hash |
+            Set-Content chocolatey/tools/chocolateyinstall.ps1
+
+      - name: Pack
+        shell: pwsh
+        run: choco pack chocolatey/kobol.nuspec --outputdirectory dist-choco
+
+      - name: Push to Chocolatey
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        if: ${{ env.CHOCO_API_KEY != '' }}
+        run: |
+          $pkg = (Get-ChildItem dist-choco/*.nupkg | Select-Object -First 1).FullName
+          choco push $pkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+
+  # ---------------------------------------------------------------------------
+  # 8. Build and publish the VS Code extension
+  #    Stamps the tag version into extension/package.json, packages a .vsix,
+  #    attaches it to the GitHub Release, and publishes to the VS Code
+  #    Marketplace (vsce) and Open VSX (ovsx). Each publish step is gated on its
+  #    token secret, so the job degrades gracefully when a token is absent.
+  #    Requires secrets: VSCE_PAT — Azure DevOps PAT (Marketplace > Manage),
+  #                                 scope "Marketplace > Manage".
+  #                       OVSX_PAT — Open VSX access token (optional).
+  #    The Marketplace publisher ID must equal the "publisher" field in
+  #    extension/package.json (kobol-lang).
+  # ---------------------------------------------------------------------------
+  vscode-extension:
+    name: Publish VS Code extension
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-') }}   # skip pre-releases
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package --out "kobol-${GITHUB_REF_NAME#v}.vsix"
+
+      - name: Attach VSIX to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension/kobol-*.vsix
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        if: ${{ env.VSCE_PAT != '' }}
+        run: npx --yes @vscode/vsce publish --packagePath kobol-*.vsix --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        if: ${{ env.OVSX_PAT != '' }}
+        run: npx --yes ovsx publish kobol-*.vsix --pat "$OVSX_PAT"

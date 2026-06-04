@@ -1,0 +1,20 @@
+# Shell scripts must always be LF — CRLF breaks shebang on Linux/macOS
+gradlew        text eol=lf
+gradlew.bat    text eol=crlf
+
+# Source files
+*.kt           text eol=lf
+*.kts          text eol=lf
+*.java         text eol=lf
+*.properties   text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.json         text eol=lf
+*.xml          text eol=lf
+*.md           text eol=lf
+
+# Binary — no line-ending conversion
+*.jar          binary
+*.zip          binary
+*.png          binary
+*.jpg          binary

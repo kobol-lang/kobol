@@ -1,0 +1,17 @@
+<svg viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- outer ring -->
+  <circle cx="40" cy="40" r="36" stroke="#C67C5B" stroke-width="2.5" fill="#FDF6F0"/>
+  <!-- spokes -->
+  <g stroke="#C67C5B" stroke-width="1.2" opacity="0.35">
+    <line x1="40" y1="6" x2="40" y2="34"/>
+    <line x1="40" y1="46" x2="40" y2="74"/>
+    <line x1="6" y1="40" x2="34" y2="40"/>
+    <line x1="46" y1="40" x2="74" y2="40"/>
+    <line x1="16" y1="16" x2="35" y2="35"/>
+    <line x1="45" y1="45" x2="64" y2="64"/>
+    <line x1="16" y1="64" x2="35" y2="45"/>
+    <line x1="45" y1="35" x2="64" y2="16"/>
+  </g>
+  <!-- hub Ko -->
+  <text x="40" y="41.5" dominant-baseline="middle" text-anchor="middle" font-size="9" font-weight="800" fill="#C67C5B" font-family="system-ui, sans-serif" letter-spacing="-0.5">Ko</text>
+</svg>

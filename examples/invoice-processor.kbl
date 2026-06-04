@@ -1,0 +1,132 @@
+NOTE:
+  Invoice Processor — demonstrates core Kobol features:
+  RECORD types, DATA section, file I/O, arithmetic, conditions,
+  FOR EACH loop, IF/ELSE, PERFORM, TRY/ON.
+END-NOTE
+
+PROGRAM InvoiceProcessor
+  VERSION "2.0"
+  AUTHOR  "Finance Systems"
+
+IMPORT java.time.LocalDate
+
+-- ---- Data Model ----------------------------------------
+
+RECORD Invoice:
+  invoice-id    : INTEGER
+  customer-name : TEXT(100)
+  amount        : MONEY(12.2)
+  due-date      : DATE
+  paid          : BOOLEAN
+  status-code   : TEXT(1)
+    CONDITION Pending WHEN status-code = "P"
+    CONDITION Paid    WHEN status-code = "X"
+    CONDITION Overdue WHEN status-code = "O"
+
+RECORD ProcessingSummary:
+  total-count       : INTEGER
+  paid-count        : INTEGER
+  overdue-count     : INTEGER
+  pending-count     : INTEGER
+  total-amount      : MONEY(14.2)
+  total-outstanding : MONEY(14.2)
+
+-- ---- File Declarations ---------------------------------
+
+FILES:
+  InvoiceFile AS SEQUENTIAL CSV RECORD Invoice
+  ReportFile  AS SEQUENTIAL TEXT RECORD ProcessingSummary FOR OUTPUT
+
+-- ---- Constants -----------------------------------------
+
+DEFINE LATE-FEE-PERCENT : DECIMAL = 1.5
+DEFINE MAX-LATE-FEE     : MONEY   = 500.00
+
+-- ---- Working Storage -----------------------------------
+
+DATA:
+  current-invoice : Invoice
+  summary         : ProcessingSummary
+  today           : DATE
+  late-fee        : MONEY(10.2) = 0
+  adjusted-amount : MONEY(12.2) = 0
+
+-- ---- Procedures ----------------------------------------
+
+PROCEDURE Main:
+  CALL LocalDate.now GIVING today
+  DISPLAY "=== Invoice Processor ==="
+  DISPLAY "Run date: " today
+
+  TRY:
+    PERFORM ProcessAllInvoices
+    PERFORM WriteReport
+    PERFORM DisplaySummary
+  ON FILE-NOT-FOUND:
+    DISPLAY "ERROR: Invoice file not found. Ensure InvoiceFile is available."
+    STOP RUN WITH EXIT-CODE 1
+  ON IO-ERROR AS err:
+    DISPLAY "I/O Error: " err.message
+    STOP RUN WITH EXIT-CODE 2
+  END-TRY
+
+  STOP RUN
+END-PROCEDURE
+
+PROCEDURE ProcessAllInvoices:
+  MOVE 0 TO summary.total-count
+  MOVE 0 TO summary.total-amount
+  MOVE 0 TO summary.total-outstanding
+
+  FOR EACH inv IN InvoiceFile:
+    MOVE inv TO current-invoice
+    PERFORM ProcessOneInvoice
+  END-FOR
+END-PROCEDURE
+
+PROCEDURE ProcessOneInvoice:
+  ADD 1                        TO summary.total-count
+  ADD current-invoice.amount   TO summary.total-amount
+
+  IF current-invoice.Paid:
+    ADD 1 TO summary.paid-count
+
+  ELSE IF current-invoice.Overdue:
+    ADD 1 TO summary.overdue-count
+    PERFORM CalculateLateFee
+    ADD adjusted-amount TO summary.total-outstanding
+
+  ELSE:
+    -- Pending invoice
+    ADD 1 TO summary.pending-count
+    ADD current-invoice.amount TO summary.total-outstanding
+  END-IF
+END-PROCEDURE
+
+PROCEDURE CalculateLateFee:
+  COMPUTE late-fee = current-invoice.amount * LATE-FEE-PERCENT / 100
+  IF late-fee > MAX-LATE-FEE:
+    MOVE MAX-LATE-FEE TO late-fee
+  END-IF
+  -- TODO: make LATE-FEE-PERCENT configurable per customer segment
+  COMPUTE adjusted-amount = current-invoice.amount + late-fee
+  DISPLAY "Late fee for invoice " current-invoice.invoice-id " (" current-invoice.customer-name "): " late-fee
+END-PROCEDURE
+
+PROCEDURE WriteReport:
+  OPEN ReportFile FOR OUTPUT
+  WRITE ReportFile FROM summary
+  CLOSE ReportFile
+  DISPLAY "Report written."
+END-PROCEDURE
+
+PROCEDURE DisplaySummary:
+  DISPLAY ""
+  DISPLAY "--- Processing Summary ---"
+  DISPLAY "Total invoices  : " summary.total-count
+  DISPLAY "  Paid          : " summary.paid-count
+  DISPLAY "  Overdue       : " summary.overdue-count
+  DISPLAY "  Pending       : " summary.pending-count
+  DISPLAY "Total amount    : " summary.total-amount
+  DISPLAY "Outstanding     : " summary.total-outstanding
+END-PROCEDURE
