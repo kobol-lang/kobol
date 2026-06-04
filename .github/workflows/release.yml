@@ -158,23 +158,31 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x gradlew
 
-      - name: Build native image
-        run: ./gradlew :compiler:nativeCompile --no-daemon
+      - name: Build native image + runtime jar
+        # The native binary spawns a child `java` to run compiled programs; that JVM
+        # needs the kobol runtime/stdlib jar (the binary's baked-in classes are invisible
+        # to a child process). Ship kobolc.jar in lib/ next to the binary — KobolHome
+        # resolves <bindir>/lib/*.jar at run time.
+        run: ./gradlew :compiler:nativeCompile :compiler:jar --no-daemon
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          cd compiler/build/native/nativeCompile
-          tar -czf "${{ matrix.asset_name }}.tar.gz" kobol
-          mv "${{ matrix.asset_name }}.tar.gz" "${{ github.workspace }}/"
+          STAGE="${{ github.workspace }}/stage"
+          mkdir -p "$STAGE/lib"
+          cp compiler/build/native/nativeCompile/kobol "$STAGE/kobol"
+          cp compiler/build/libs/kobolc.jar "$STAGE/lib/kobolc.jar"
+          tar -czf "${{ github.workspace }}/${{ matrix.asset_name }}.tar.gz" -C "$STAGE" kobol lib
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path "compiler\build\native\nativeCompile\kobol.exe" `
-            -DestinationPath "${{ matrix.asset_name }}.zip"
+          $stage = "${{ github.workspace }}\stage"
+          New-Item -ItemType Directory -Force -Path "$stage\lib" | Out-Null
+          Copy-Item "compiler\build\native\nativeCompile\kobol.exe" "$stage\kobol.exe"
+          Copy-Item "compiler\build\libs\kobolc.jar" "$stage\lib\kobolc.jar"
+          Compress-Archive -Path "$stage\kobol.exe","$stage\lib" -DestinationPath "${{ matrix.asset_name }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

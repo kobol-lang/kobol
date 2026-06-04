@@ -178,12 +178,11 @@ object ProjectBuilder {
         val mainClass = descriptor.name.split("-").joinToString("") {
             it.lowercase().replaceFirstChar { c -> c.uppercase() }
         }
-        // Classpath: compiled classes + kobol stdlib (bundled in this JAR) + lib/*.jar
+        // Classpath: compiled classes + kobol runtime/stdlib jar(s) + project lib/*.jar
         val classPaths = mutableListOf(descriptor.classesDir.absolutePath)
-        val kobolJar = runCatching {
-            File(ProjectBuilder::class.java.protectionDomain.codeSource.location.toURI())
-        }.getOrNull()
-        if (kobolJar != null && kobolJar.exists()) classPaths.add(kobolJar.absolutePath)
+        val runtimeCp = dev.kobol.KobolHome.runtimeClasspath()
+        if (runtimeCp.isEmpty()) { System.err.println(dev.kobol.KobolHome.missingRuntimeMessage); return 1 }
+        classPaths.addAll(runtimeCp)
         File("lib").walkTopDown()
             .filter { it.isFile && it.extension == "jar" }
             .mapTo(classPaths) { it.absolutePath }
@@ -270,7 +269,8 @@ object ProjectBuilder {
 
         val registry = buildModuleRegistry(testFiles)
 
-        var totalFailures = 0
+        var compileFailures = 0
+        val suites = mutableListOf<String>()
         for (file in testFiles) {
             val options = CompilerOptions(
                 sourceFile = file,
@@ -281,71 +281,50 @@ object ProjectBuilder {
             val ok = compileFile(file, options, registry)
             if (!ok) {
                 System.err.println("kobol: test compilation failed for '${file.name}'")
-                totalFailures++
+                compileFailures++
                 continue
             }
-            totalFailures += runTestFile(file, testClassesDir, descriptor.classesDir)
+            suites.add(classNameForFile(file))
         }
-        return totalFailures
+        // Run every suite in a single child JVM — one process for the whole run,
+        // not one per file — then add any compile failures to the tally.
+        return compileFailures + runTestSuites(suites, listOf(testClassesDir, descriptor.classesDir))
     }
 
     /**
-     * Parse [sourceFile] to determine if it contains TEST blocks, then invoke
-     * its generated `runAll()` method via [URLClassLoader].
+     * Run the test suite generated from a single compiled [sourceFile].
      * [mainClassesDir] is added to the classpath so test code can call production procedures.
      */
-    fun runTestFile(sourceFile: File, testClassesDir: File, mainClassesDir: File? = null): Int {
-        val rawText = sourceFile.readText()
-        val src = if (rawText.startsWith("#!")) rawText.substringAfter('\n') else rawText
-        val program = try {
-            val tokens = Lexer(src, sourceFile.name).tokenize()
-            Parser(tokens, sourceFile.name).parseProgram()
-        } catch (e: LexException) {
-            System.err.println("kobol: cannot parse test file '${sourceFile.name}': ${e.message}")
-            return 1
-        } catch (e: ParseException) {
-            System.err.println("kobol: cannot parse test file '${sourceFile.name}': ${e.message}")
-            return 1
-        }
+    fun runTestFile(sourceFile: File, testClassesDir: File, mainClassesDir: File? = null): Int =
+        runTestSuites(listOf(classNameForFile(sourceFile)), listOfNotNull(testClassesDir, mainClassesDir))
 
-        if (program.tests.isEmpty() && program.tableTests.isEmpty()) {
-            println("kobol: '${sourceFile.name}' contains no TEST blocks — skipping")
-            return 0
-        }
+    /**
+     * Derive the generated JVM class name for [sourceFile]. Mirrors the scheme in
+     * [compileFile], which names the class after the file (not `PROGRAM`), so the
+     * name always matches the `.class` emitted to disk.
+     */
+    private fun classNameForFile(sourceFile: File): String =
+        sourceFile.nameWithoutExtension.split("-")
+            .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
 
-        val className = program.name.split("-").joinToString("") { part ->
-            val hasUpper = part.any { it.isUpperCase() }
-            val hasLower = part.any { it.isLowerCase() }
-            if (hasUpper && hasLower) part.replaceFirstChar { c -> c.uppercase() }
-            else part.lowercase().replaceFirstChar { c -> c.uppercase() }
-        }
+    /**
+     * Run the given generated test [classNames] in a single child JVM via
+     * [dev.kobol.runtime.KobolTestRunner], returning the total failure count.
+     *
+     * A child JVM (not in-process reflection) is required because the `kobol`
+     * launcher may be a GraalVM native image, which cannot load/execute `.class`
+     * bytecode produced after the image was built. One process runs every suite,
+     * so wall-clock is O(JVM startup) once — not once per test file.
+     */
+    private fun runTestSuites(classNames: List<String>, classDirs: List<File>): Int {
+        if (classNames.isEmpty()) return 0
 
-        val classDirs = listOfNotNull(testClassesDir, mainClassesDir).toTypedArray()
-        return invokeRunAll(className, *classDirs)
-    }
+        val runtimeCp = dev.kobol.KobolHome.runtimeClasspath()
+        if (runtimeCp.isEmpty()) { System.err.println(dev.kobol.KobolHome.missingRuntimeMessage); return classNames.size }
 
-    private fun invokeRunAll(className: String, vararg classDirs: File): Int {
-        val urls = classDirs.map { it.toURI().toURL() }.toTypedArray()
-        val loader = java.net.URLClassLoader(urls, Thread.currentThread().contextClassLoader)
-        return try {
-            val cls = loader.loadClass(className)
-            val runAll = try {
-                cls.getMethod("runAll")
-            } catch (_: NoSuchMethodException) {
-                println("kobol: '$className' has no runAll() — no tests generated")
-                return 0
-            }
-            val failures = runAll.invoke(null) as Int
-            failures
-        } catch (e: ClassNotFoundException) {
-            System.err.println("kobol: could not load test class '$className': ${e.message}")
-            1
-        } catch (e: Exception) {
-            System.err.println("kobol: error running tests in '$className': ${e.message}")
-            1
-        } finally {
-            loader.close()
-        }
+        val cp = (classDirs.map { it.absolutePath } + runtimeCp).joinToString(File.pathSeparator)
+        val javaArgs = listOf("java", "-cp", cp, "dev.kobol.runtime.KobolTestRunner") + classNames
+        return ProcessBuilder(javaArgs).inheritIO().start().waitFor()
     }
 
     /** Scaffold a new Kobol project with `kobol.toml`, src/, and initial source files. */
@@ -540,30 +519,49 @@ object ProjectBuilder {
                     addEntry(jos, path, classFile.readBytes())
                 }
 
-            // 2. Kobol stdlib/runtime (from this JAR)
-            val kobolJar = runCatching {
-                File(ProjectBuilder::class.java.protectionDomain.codeSource.location.toURI())
-            }.getOrNull()
-            if (kobolJar != null && kobolJar.exists() && kobolJar.extension == "jar") {
-                java.util.jar.JarFile(kobolJar).use { jf ->
-                    jf.entries().asSequence()
-                        .filter { !it.isDirectory && it.name != "META-INF/MANIFEST.MF" }
-                        .forEach { entry -> addEntry(jos, entry.name, jf.getInputStream(entry).readBytes()) }
-                }
+            // 2. Kobol stdlib/runtime (+ their deps) — resolved via KobolHome so this
+            //    works whether kobol runs as a fat jar or a native image. (The old
+            //    protectionDomain lookup silently yielded the native binary, not a jar,
+            //    producing a runtime-less jar that failed at the consumer side.)
+            val runtimeCp = dev.kobol.KobolHome.runtimeClasspath()
+            if (runtimeCp.isEmpty()) {
+                System.err.println("kobol: warning — runtime/stdlib not bundled; the jar will not run standalone.")
+                System.err.println(dev.kobol.KobolHome.missingRuntimeMessage)
             }
+            for (entry in runtimeCp) bundleClasspathEntry(jos, File(entry), ::addEntry)
 
             // 3. Resolved dependencies from lib/
             File("lib").walkTopDown()
                 .filter { it.isFile && it.extension == "jar" }
-                .forEach { depJar ->
-                    java.util.jar.JarFile(depJar).use { jf ->
-                        jf.entries().asSequence()
-                            .filter { !it.isDirectory && it.name != "META-INF/MANIFEST.MF" }
-                            .forEach { entry -> addEntry(jos, entry.name, jf.getInputStream(entry).readBytes()) }
-                    }
-                }
+                .forEach { depJar -> bundleClasspathEntry(jos, depJar, ::addEntry) }
         }
         println("kobol: assembled ${jarFile.path}")
+    }
+
+    /**
+     * Copy the contents of a classpath [entry] (a `.jar` or a class directory) into
+     * the open [jos]. Skips `MANIFEST.MF` and de-dupes via the supplied [addEntry].
+     */
+    private fun bundleClasspathEntry(
+        jos: JarOutputStream,
+        entry: File,
+        addEntry: (JarOutputStream, String, ByteArray) -> Unit,
+    ) {
+        when {
+            entry.isFile && entry.extension == "jar" ->
+                java.util.jar.JarFile(entry).use { jf ->
+                    jf.entries().asSequence()
+                        .filter { !it.isDirectory && it.name != "META-INF/MANIFEST.MF" }
+                        .forEach { e -> addEntry(jos, e.name, jf.getInputStream(e).readBytes()) }
+                }
+            entry.isDirectory ->
+                entry.walkTopDown()
+                    .filter { it.isFile && it.name != "MANIFEST.MF" }
+                    .forEach { cf ->
+                        val path = cf.relativeTo(entry).path.replace(File.separatorChar, '/')
+                        addEntry(jos, path, cf.readBytes())
+                    }
+        }
     }
 
     // -------------------------------------------------------------------------

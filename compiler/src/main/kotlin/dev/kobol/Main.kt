@@ -82,8 +82,10 @@ private fun projectRun(args: List<String>) {
             if (ok) {
                 val mainClass = file.nameWithoutExtension.split("-")
                     .joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
-                // Classpath = compiled classes + this CLI's own classpath (carries dev.kobol.runtime).
-                val cp = tmpDir.absolutePath + File.pathSeparator + System.getProperty("java.class.path")
+                // Classpath = compiled classes + the Kobol runtime/stdlib jar(s).
+                val runtimeCp = KobolHome.runtimeClasspath()
+                if (runtimeCp.isEmpty()) { System.err.println(KobolHome.missingRuntimeMessage); System.exit(1); return }
+                val cp = (listOf(tmpDir.absolutePath) + runtimeCp).joinToString(File.pathSeparator)
                 ProcessBuilder("java", "-cp", cp, mainClass)
                     .inheritIO().start().waitFor()
             }

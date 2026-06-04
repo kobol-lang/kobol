@@ -212,7 +212,10 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
                 BinaryOp.SUBTRACT -> emitBigDecimalOp(mv, "subtract")
                 BinaryOp.MULTIPLY -> emitBigDecimalOp(mv, "multiply")
                 BinaryOp.DIVIDE   -> emitBigDecimalOp(mv, "divide")
-                BinaryOp.EQ  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); mv.visitInsn(ICONST_0); mv.visitInsn(ISUB); mv.visitInsn(INEG) }
+                // compareTo (not equals) so scale differs but value matches → equal,
+                // e.g. 124.99 == 124.990. emitCompareFlag normalizes to a 0/1 boolean.
+                BinaryOp.EQ  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFEQ) }
+                BinaryOp.NEQ -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFNE) }
                 BinaryOp.GT  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFGT) }
                 BinaryOp.LT  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFLT) }
                 BinaryOp.GEQ -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFGE) }

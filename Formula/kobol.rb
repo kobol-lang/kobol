@@ -39,8 +39,17 @@ class Kobol < Formula
   end
 
   def install
-    bin.install "kobol"
+    # The native binary spawns a child `java` to run compiled programs; that JVM
+    # needs lib/kobolc.jar (runtime + stdlib). KobolHome resolves it relative to the
+    # (canonicalized) executable path, so keep the binary and lib/ together under
+    # libexec and expose the binary via a symlink in bin.
+    libexec.install "kobol"
+    libexec.install "lib"
+    bin.install_symlink libexec / "kobol"
   end
+
+  # Compiled Kobol programs run on a JVM; Java 21+ must be available at run time.
+  depends_on "openjdk@21" => :recommended
 
   def caveats
     <<~EOS
