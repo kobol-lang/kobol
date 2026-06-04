@@ -498,6 +498,10 @@ jobs:
         run: npx --yes @vscode/vsce publish --packagePath kobol-*.vsix --pat "$VSCE_PAT"
 
       - name: Publish to Open VSX
+        # Open VSX rejects the 'kobol-lang' namespace as too similar to 'koto-lang'.
+        # Until that namespace is granted (appeal at EclipseFdn/open-vsx.org), this
+        # step is best-effort and must not fail the release.
+        continue-on-error: true
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         if: ${{ env.OVSX_PAT != '' }}
