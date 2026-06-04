@@ -1,6 +1,6 @@
 {
   "name": "kobol-language-support",
-  "displayName": "Kobol Language Support",
+  "displayName": "Kobol Programming Language",
   "description": "Full IDE support for Kobol (.kbl) — syntax highlighting, diagnostics, go-to-definition, hover types, outline, signature help, code actions, inlay hints, folding, and build integration",
   "version": "0.1.0",
   "publisher": "kobol-lang",
