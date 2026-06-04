@@ -19,14 +19,10 @@ class Kobol < Formula
   license "Apache-2.0"
 
   on_macos do
+    # Apple Silicon only. Intel Macs: use the fat JAR (any JVM 21+).
     on_arm do
       url "https://github.com/kobol-lang/kobol/releases/download/v#{version}/kobol-macos-arm64.tar.gz"
       sha256 "PLACEHOLDER_MACOS_ARM64_SHA256"
-    end
-
-    on_intel do
-      url "https://github.com/kobol-lang/kobol/releases/download/v#{version}/kobol-macos-x86_64.tar.gz"
-      sha256 "PLACEHOLDER_MACOS_X86_64_SHA256"
     end
   end
 

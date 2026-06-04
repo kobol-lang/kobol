@@ -123,10 +123,6 @@ jobs:
             runner:     macos-latest
             asset_name: kobol-macos-arm64
 
-          - name:       macos-x86_64
-            runner:     macos-13
-            asset_name: kobol-macos-x86_64
-
           - name:       linux-x86_64
             runner:     ubuntu-latest
             asset_name: kobol-linux-x86_64
@@ -236,7 +232,7 @@ jobs:
 
             **Linux / macOS (native binary — no JVM required)**
             ```bash
-            # Replace <platform> with macos-arm64, macos-x86_64, linux-x86_64, or linux-aarch64
+            # Replace <platform> with macos-arm64, linux-x86_64, or linux-aarch64
             curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/kobol-<platform>.tar.gz | tar xz
             sudo mv kobol /usr/local/bin/
             ```
@@ -384,7 +380,6 @@ jobs:
           sed -i \
             -e "s/version \".*\"/version \"$VERSION\"/" \
             -e "s/PLACEHOLDER_MACOS_ARM64_SHA256/$(sha kobol-macos-arm64.tar.gz)/" \
-            -e "s/PLACEHOLDER_MACOS_X86_64_SHA256/$(sha kobol-macos-x86_64.tar.gz)/" \
             -e "s/PLACEHOLDER_LINUX_AARCH64_SHA256/$(sha kobol-linux-aarch64.tar.gz)/" \
             -e "s/PLACEHOLDER_LINUX_X86_64_SHA256/$(sha kobol-linux-x86_64.tar.gz)/" \
             "$f"
