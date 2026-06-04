@@ -1,0 +1,7 @@
+# Code owners for the Kobol repository.
+# Order matters: the last matching pattern for a given path wins.
+# These users/teams are requested for review by default on matching changes.
+# Docs: https://docs.github.com/articles/about-code-owners
+
+# Global owner — everything, unless overridden below.
+*       @mrtinkz
