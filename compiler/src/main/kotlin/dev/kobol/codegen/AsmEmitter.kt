@@ -178,6 +178,11 @@ class AsmEmitter(
                 init.visitVarInsn(ALOAD, 0)
                 init.visitLdcInsn("")
                 init.visitFieldInsn(PUTFIELD, name, javaIdent(f.name), "L$STRING;")
+            } else if (kt is KobolType.UuidType) {
+                // Spec §6: UUID defaults to the Nil UUID (else field is null → NPE on use).
+                init.visitVarInsn(ALOAD, 0)
+                init.visitMethodInsn(INVOKESTATIC, "dev/kobol/stdlib/KobolUuid", "nil", "()Ljava/util/UUID;", false)
+                init.visitFieldInsn(PUTFIELD, name, javaIdent(f.name), "Ljava/util/UUID;")
             }
         }
         init.visitInsn(RETURN)
@@ -278,7 +283,7 @@ class AsmEmitter(
         val dataItems = program.dataSection?.items ?: emptyList()
         val needsDefaultInit = { item: dev.kobol.parser.ast.DataItem ->
             val kt = if (item.type != null) checker.toKobolType(item.type) else null
-            item.initializer == null && (kt is KobolType.ListType || kt is KobolType.MapType || kt is KobolType.TextType || kt is KobolType.RecordRefType)
+            item.initializer == null && (kt is KobolType.ListType || kt is KobolType.MapType || kt is KobolType.TextType || kt is KobolType.RecordRefType || kt is KobolType.MoneyType || kt is KobolType.DecimalType || kt is KobolType.UuidType)
         }
         val needsClinit = emitsLog || dataItems.any { it.initializer != null } || dataItems.any(needsDefaultInit)
         if (needsClinit) {
@@ -297,13 +302,7 @@ class AsmEmitter(
                 val kType = if (item.type != null) checker.toKobolType(item.type)
                             else item.initializer?.let { inferExprType(it) } ?: KobolType.TextType(null)
                 if (item.initializer != null) {
-                    emitExpr(ctx, item.initializer)
-                    if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
-                        coerceToDecimalIfNeeded(clinit, inferExprType(item.initializer))
-                    } else {
-                        coerceIntToTarget(clinit, inferExprType(item.initializer), kType)
-                    }
-                    clinit.visitFieldInsn(PUTSTATIC, outerName, javaIdent(item.name), recDesc(outerName, kType))
+                    emitDataInitializer(ctx, item)   // F7: shared with the main() prologue
                 } else {
                     // Spec defaults: TEXT → "", LIST → new ArrayList<>(), MAP → new LinkedHashMap<>()
                     when (kType) {
@@ -332,6 +331,21 @@ class AsmEmitter(
                             clinit.visitInsn(DUP)
                             clinit.visitMethodInsn(INVOKESPECIAL, recClass, "<init>", "()V", false)
                             clinit.visitFieldInsn(PUTSTATIC, outerName, javaIdent(item.name), recDesc(outerName, kType))
+                        }
+                        is KobolType.MoneyType, is KobolType.DecimalType -> {
+                            // Spec §6: MONEY/DECIMAL default to 0. A top-level field of these
+                            // types with no initializer would otherwise fall to the JVM `null`
+                            // below and NPE on first use. Match the record no-arg ctor exactly
+                            // (see emitRecordClass: BigDecimal.ZERO) so top-level and record-field
+                            // zeros are identical.
+                            clinit.visitFieldInsn(GETSTATIC, BIGDECIMAL, "ZERO", "L$BIGDECIMAL;")
+                            clinit.visitFieldInsn(PUTSTATIC, outerName, javaIdent(item.name), "L$BIGDECIMAL;")
+                        }
+                        is KobolType.UuidType -> {
+                            // Spec §6: UUID defaults to the Nil UUID. Same null-landmine class
+                            // as MONEY/DECIMAL above; match the record ctor (KobolUuid.nil()).
+                            clinit.visitMethodInsn(INVOKESTATIC, "dev/kobol/stdlib/KobolUuid", "nil", "()Ljava/util/UUID;", false)
+                            clinit.visitFieldInsn(PUTSTATIC, outerName, javaIdent(item.name), "Ljava/util/UUID;")
                         }
                         else -> { /* JVM default (0, false, null) matches Kobol defaults */ }
                     }
@@ -393,6 +407,25 @@ class AsmEmitter(
                     else item.initializer?.let { inferExprType(it) } ?: KobolType.TextType(null)
         val desc  = recDesc(owner, kType)
         cw.visitField(ACC_PRIVATE or ACC_STATIC, javaIdent(item.name), desc, null, null).visitEnd()
+    }
+
+    /**
+     * Emit a DATA item's explicit initializer as `<expr> → PUTSTATIC field` (F7). Shared by the
+     * two phases that run initializers: the `<clinit>` (at class load) and the `main()` prologue
+     * (re-run AFTER the CONFIG section is loaded, so a config-referencing initializer resolves).
+     * The phases differ only in WHEN they run — not in HOW a field is initialized — so the emit is
+     * identical and lives here once. `ctx.mv`/`ctx.owner` carry the phase's visitor + owner.
+     * Caller guarantees `item.initializer != null`.
+     */
+    private fun emitDataInitializer(ctx: MethodContext, item: DataItem) {
+        val init  = item.initializer!!
+        val kType = if (item.type != null) checker.toKobolType(item.type) else inferExprType(init)
+        emitExpr(ctx, init)
+        if (kType is KobolType.MoneyType || kType is KobolType.DecimalType)
+            coerceToDecimalIfNeeded(ctx.mv, inferExprType(init))
+        else
+            coerceIntToTarget(ctx.mv, inferExprType(init), kType)
+        ctx.mv.visitFieldInsn(PUTSTATIC, ctx.owner, javaIdent(item.name), recDesc(ctx.owner, kType))
     }
 
     // -------------------------------------------------------------------------
@@ -584,17 +617,7 @@ class AsmEmitter(
         }
 
         program.dataSection?.items?.forEach { item ->
-            if (item.initializer != null) {
-                val kType = if (item.type != null) checker.toKobolType(item.type)
-                            else inferExprType(item.initializer)
-                emitExpr(ctx, item.initializer)
-                if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
-                    coerceToDecimalIfNeeded(mv, inferExprType(item.initializer))
-                } else {
-                    coerceIntToTarget(mv, inferExprType(item.initializer), kType)
-                }
-                mv.visitFieldInsn(PUTSTATIC, owner, javaIdent(item.name), recDesc(owner, kType))
-            }
+            if (item.initializer != null) emitDataInitializer(ctx, item)   // F7: shared with <clinit>
         }
 
         if (mainProc != null) {

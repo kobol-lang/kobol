@@ -671,6 +671,20 @@ data class RecordLiteralField(
 )
 
 /**
+ * Construct an arbitrary classpath / 3rd-party object (interop, F12).
+ * `NEW StringBuilder WITH "hi"` → JVM `NEW` + `<init>(...)`. The owner string keeps the
+ * original source case ("StringBuilder", "java.util.ArrayList") and is resolved to a JVM
+ * class the same way `CALL` resolves a static owner (import alias / stdlib / java.lang / FQN).
+ * Result type is JAVA-OBJECT; arguments are positional, descriptors inferred Kobol-side
+ * (no classpath read — overload truth waits on the E2 interop engine).
+ */
+data class NewExpr(
+    val owner: String,
+    val args: List<Expression>,
+    override val pos: SourcePosition,
+) : Expression()
+
+/**
  * A named argument in a PERFORM / DO call (ergonomics §17.12).
  * Wraps a regular expression with the declared parameter name.
  */

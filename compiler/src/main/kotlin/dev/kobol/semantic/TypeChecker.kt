@@ -80,7 +80,9 @@ class TypeChecker(
                 val info = moduleRegistry.resolveByAlias(alias) ?: continue
                 if (!satisfiesVersionConstraint(info.version, imp.versionConstraint)) {
                     error(
-                        "E215",
+                        // E219 (was E215): IMPORT version-constraint mismatch. E215 is reserved for
+                        // the async-GIVING family (E215 sync-GIVING misuse, E216/E217/E218) — F5.
+                        "E219",
                         "IMPORT '${imp.qualifiedName}' VERSION \"${imp.versionConstraint}\" not satisfied" +
                             " — registered version is \"${info.version ?: "unknown"}\"",
                         imp.pos,
@@ -822,6 +824,16 @@ class TypeChecker(
                     error("E214", "Argument ${i+1} to '${stmt.moduleAlias}.${stmt.procedureName}': expected ${proc.params[i].type}, got $argType", stmt.pos)
                 }
             }
+            // GIVING on a cross-module call — mirror the local rules below, never drop silently.
+            if (stmt.giving != null) {
+                resolveRefType(stmt.giving)  // surface an undefined target the same as the local path
+                val qualified = "${stmt.moduleAlias}.${stmt.procedureName}"
+                if (!proc.isAsync) {
+                    error("E215", "GIVING is only valid for ASYNC PROCEDURE calls; '$qualified' is not async", stmt.pos)
+                } else {
+                    error("E218", "Capturing an ASYNC result across modules is not yet supported; call '$qualified' synchronously via COMPUTE (e.g. COMPUTE x = $qualified(args)), or AWAIT a locally-declared FUTURE", stmt.pos)
+                }
+            }
             return
         }
         val sym = symbols.resolve(stmt.procedureName)
@@ -950,6 +962,19 @@ class TypeChecker(
                 }
             }
             KobolType.RecordRefType(expr.typeName)
+        }
+
+        is NewExpr -> {
+            // F12: construct an arbitrary classpath object. We cannot validate the constructor
+            // against the real class without the E2 classpath-reading phase, so we only check
+            // the argument expressions and hand back JAVA-OBJECT (same opaque type CALL uses for
+            // interop results). Named arguments need declared fields to reorder → reject them.
+            expr.args.forEach {
+                if (it is NamedArgument)
+                    error("E031", "NEW ${expr.owner}: named arguments need a known constructor signature; use positional arguments", it.pos)
+                checkExpr(it)
+            }
+            KobolType.JavaObjectType
         }
 
         is NamedArgument -> checkExpr(expr.value)
@@ -1104,6 +1129,14 @@ class TypeChecker(
         val rootName = ref.parts[0]
         val sym = symbols.resolve(rootName)
         if (sym == null) {
+            // F1: a bare single-part name matching a field-less VARIANT case constructs that case
+            // (`MOVE Pending TO st`). Mirrors the call-form path (variantCaseIndex) used for
+            // `Pending()`; a real symbol of the same name shadows it (checked above).
+            if (ref.parts.size == 1) {
+                val caseEntry = variantCaseIndex[rootName.uppercase()]
+                if (caseEntry != null && caseEntry.second.fields.isEmpty())
+                    return KobolType.VariantRefType(caseEntry.first)
+            }
             val suggestion = didYouMean(rootName, symbols.allVisibleNames())
             error("E001", "Undefined name '${rootName}'${if (suggestion != null) " — $suggestion" else ""}", ref.pos)
             return KobolType.UnknownType

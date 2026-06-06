@@ -123,7 +123,7 @@ object KobolCompiler {
             for (proc in program.procedures) {
                 if (!proc.exported && proc.name !in exportedNames) continue
                 val params = proc.params.map { p -> Symbol.ProcedureSymbol.Param(p.name, astTypeToKobol(p.type)) }
-                procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, proc.returnType?.let { astTypeToKobol(it) })
+                procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, proc.returnType?.let { astTypeToKobol(it) }, proc.isAsync)
             }
 
             val records = mutableMapOf<String, Symbol.RecordSymbol>()

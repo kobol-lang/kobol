@@ -327,6 +327,7 @@ class Repl {
         is StringTemplateExpr -> "\"...\""
         is BuiltinCall       -> "${expr.name}(${expr.args.size} arg(s))"
         is RecordLiteralExpr -> "${expr.typeName}{...}"
+        is NewExpr           -> "NEW ${expr.owner}(${expr.args.size} arg(s))"
         is NamedArgument     -> "${expr.paramName}: ${exprSummary(expr.value)}"
         is PipelineExpr      -> "${exprSummary(expr.source)} |> ${expr.stages.size} stage(s)"
     }

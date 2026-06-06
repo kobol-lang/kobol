@@ -118,7 +118,7 @@ object ProjectBuilder {
                     Symbol.ProcedureSymbol.Param(p.name, astTypeToKobol(p.type))
                 }
                 val returnType = proc.returnType?.let { astTypeToKobol(it) }
-                procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, returnType)
+                procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, returnType, proc.isAsync)
             }
 
             // Collect exported record types

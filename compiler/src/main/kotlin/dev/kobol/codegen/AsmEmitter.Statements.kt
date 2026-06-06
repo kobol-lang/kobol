@@ -94,6 +94,7 @@ internal fun AsmEmitter.emitMove(ctx: MethodContext, stmt: MoveStatement) {
         } else {
             coerceIntToTarget(mv, fromType, targetType)
         }
+        snapshotIfRecord(ctx, fromType)   // F2: MOVE rec TO rec snapshots the source, not aliases it
         emitStore(ctx, stmt.to)
     }
 
@@ -114,17 +115,34 @@ internal fun AsmEmitter.emitMove(ctx: MethodContext, stmt: MoveStatement) {
         return type
     }
 
+/**
+ * Value semantics (#23, F2): a record is a mutable buffer. Storing it into a holder
+ * (list element, map value, another record variable) must snapshot it via the synthetic
+ * `copy()` instead of aliasing the live buffer — otherwise later mutation of the source
+ * leaks into the already-stored value. `valueType` is the static type of the value sitting
+ * on the stack top; emits `copy()` only for records (scalars, String, BigDecimal are
+ * immutable → no copy needed). Shared by every record-store site so the rule is one place.
+ */
+internal fun AsmEmitter.snapshotIfRecord(ctx: MethodContext, valueType: KobolType) {
+    if (valueType is KobolType.RecordRefType) {
+        val recClass = "${ctx.owner}\$${javaClass(valueType.name)}"
+        ctx.mv.visitMethodInsn(INVOKEVIRTUAL, recClass, "copy", "()L$recClass;", false)
+    }
+}
+
 // PUT value TO map WITH KEY key — Map.put(key, value), discarding the returned prior value (#12).
 // Key/value are boxed by their own emitted expression type (a long must become a Long before
 // Map.put(Object,Object)). resolveSymbolType, not inferExprType, is needed for the value type
 // only at GET (a bare DATA-item Reference does not resolve through inferExprType).
 internal fun AsmEmitter.emitMapPut(ctx: MethodContext, stmt: MapPutStatement) {
     val mv = ctx.mv
+    val valueType = inferExprType(stmt.value)
     loadRef(ctx, stmt.map)                                   // Map
     emitExpr(ctx, stmt.key)
     boxValue(mv, inferExprType(stmt.key))
     emitExpr(ctx, stmt.value)
-    boxValue(mv, inferExprType(stmt.value))
+    snapshotIfRecord(ctx, valueType)                         // F2: snapshot record values, don't alias the buffer
+    boxValue(mv, valueType)
     mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put",
         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true)
     mv.visitInsn(POP)                                        // discard prior mapping
@@ -178,13 +196,7 @@ internal fun AsmEmitter.emitArith(ctx: MethodContext, target: Reference, op: Str
                 is KobolType.IntegerType  -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Long",    "valueOf", "(J)Ljava/lang/Long;",    false)
                 is KobolType.SmallIntType -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false)
                 is KobolType.BooleanType  -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;", false)
-                is KobolType.RecordRefType -> {
-                    // Value semantics (#23): records are mutable buffers, so snapshot the
-                    // operand instead of aliasing it — otherwise mutating the buffer after
-                    // the ADD changes the element already in the list.
-                    val recClass = "${ctx.owner}\$${javaClass(et.name)}"
-                    mv.visitMethodInsn(INVOKEVIRTUAL, recClass, "copy", "()L$recClass;", false)
-                }
+                is KobolType.RecordRefType -> snapshotIfRecord(ctx, et)   // #23/F2: snapshot the buffer, shared helper
                 else -> { /* immutable reference types (String, BigDecimal) need no copy */ }
             }
             // List.add is an interface method; field type is Ljava/util/List; not ArrayList
@@ -331,6 +343,26 @@ internal fun AsmEmitter.emitAwait(ctx: MethodContext, stmt: AwaitStatement) {
         castFromObject(mv, intoType, ctx.owner)
         emitStore(ctx, stmt.into)
     }
+
+/**
+ * Resolve a `NEW Owner …` owner to a JVM internal class name (F12). Consults the SAME maps as
+ * [emitCall]'s static-owner resolution — `importAliasMap`, `STDLIB_OWNERS`, `JAVA_LANG_OWNERS` —
+ * so the alias source of truth never forks. Order differs from CALL only because a constructor
+ * has no instance-receiver interpretation (CALL checks a local/field between alias and java.lang).
+ * Unknown owner falls back to its original-case name so the resulting `NoClassDefFoundError`
+ * names the real class, surfacing a missing IMPORT rather than a misleading lowercase.
+ */
+internal fun AsmEmitter.resolveConstructorOwner(ownerParts: List<String>): String {
+    if (ownerParts.size == 1) {
+        val alias = ownerParts[0].uppercase()
+        return importAliasMap[alias]
+            ?: STDLIB_OWNERS[ownerParts[0].lowercase()]
+            ?: JAVA_LANG_OWNERS[alias]
+            ?: ownerParts[0]
+    }
+    val lowPath = ownerParts.joinToString("/") { it.lowercase() }
+    return STDLIB_OWNERS[lowPath] ?: ownerParts.joinToString("/")
+}
 
 internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
         val mv = ctx.mv

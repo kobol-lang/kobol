@@ -218,6 +218,17 @@ internal fun Parser.parsePrimary(): Expression {
             return e
         }
 
+        // 3rd-party constructor: NEW Owner [WITH|USING args] (F12). Owner is a dotted name kept
+        // in original case (advance().rawValue) so `java.util.ArrayList` and keyword-named parts
+        // survive; resolved to a JVM class at codegen like a CALL static owner.
+        if (check(NEW)) {
+            advance() // NEW
+            val ownerParts = mutableListOf(advance().rawValue)
+            while (check(DOT)) { advance(); ownerParts.add(advance().rawValue) }
+            val args = if (match(WITH) || match(USING)) parseCallArgs() else emptyList()
+            return NewExpr(ownerParts.joinToString("."), args, p)
+        }
+
         // Struct literal: TypeName { ... }
         if (check(IDENTIFIER) && peek(1).type == LBRACE) {
             val typeName = advance().value

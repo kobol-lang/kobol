@@ -15,6 +15,7 @@ class ModuleRegistry {
     data class ModuleProcedure(
         val params: List<Symbol.ProcedureSymbol.Param>,
         val returnType: KobolType?,
+        val isAsync: Boolean = false,
     )
 
     data class ModuleInfo(

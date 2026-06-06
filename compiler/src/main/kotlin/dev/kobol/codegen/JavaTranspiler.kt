@@ -588,6 +588,11 @@ class JavaTranspiler(
         is NamedArgument -> emitExpr(expr.value)
 
         is PipelineExpr  -> emitPipeline(expr)
+
+        // F12 — dormant backend, best-effort only: emits `new <owner>(args)` but does NOT
+        // resolve IMPORT aliases / stdlib paths to FQNs the way the ASM path does, so the alias
+        // form won't compile as Java. Folded into F11 (port properly if the backend is revived).
+        is NewExpr -> "new ${expr.owner}(${expr.args.joinToString(", ") { emitExpr(it) }})"
     }
 
     /**

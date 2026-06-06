@@ -26,7 +26,7 @@ class CrossModuleTypeCheckTest {
             val params = proc.params.map { p ->
                 Symbol.ProcedureSymbol.Param(p.name, toKobol(p.type))
             }
-            procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, proc.returnType?.let { toKobol(it) })
+            procedures[proc.name.uppercase()] = ModuleRegistry.ModuleProcedure(params, proc.returnType?.let { toKobol(it) }, proc.isAsync)
         }
         val jvmClass = program.name
             .split("-").joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
@@ -209,7 +209,57 @@ class CrossModuleTypeCheckTest {
         assertFalse(tc.diagnostics.hasErrors, "Expected no errors; got ${tc.diagnostics.errors}")
     }
 
-    @Test fun `IMPORT with mismatched version emits E215`() {
+    // ─── cross-module PERFORM … GIVING (no silent drop) ─────────────────────
+
+    @Test fun `cross-module PERFORM GIVING on sync procedure raises E215 (not silently dropped)`() {
+        val registry = buildRegistry(libSrc)  // Double is a sync RETURNING procedure
+        val consumerSrc = """
+            PROGRAM Consumer
+            IMPORT kobol.math AS Math
+            DATA:
+              x : INTEGER = 5
+              result : INTEGER = 0
+            PROCEDURE Main:
+              PERFORM Math.Double USING x GIVING result
+              STOP RUN
+            END-PROCEDURE
+        """.trimIndent()
+        val tc = analyzeConsumer(consumerSrc, registry)
+        val codes = tc.diagnostics.errors.map { it.code }
+        assertTrue("E215" in codes,
+            "Sync cross-module GIVING must error E215, not be silently dropped; got $codes")
+    }
+
+    @Test fun `cross-module PERFORM GIVING on async procedure raises E218 (capture unsupported)`() {
+        val asyncLibSrc = """
+            PROGRAM JobUtils
+            MODULE kobol.jobs:
+              EXPORT PROCEDURE Fetch
+            END-MODULE
+            EXPORT ASYNC PROCEDURE Fetch USING n : INTEGER RETURNING INTEGER:
+              RETURN n * 2
+            END-PROCEDURE
+        """.trimIndent()
+        val registry = buildRegistry(asyncLibSrc)
+        val consumerSrc = """
+            PROGRAM Consumer
+            IMPORT kobol.jobs AS Jobs
+            DATA:
+              x : INTEGER = 5
+              result : INTEGER = 0
+            PROCEDURE Main:
+              PERFORM Jobs.Fetch USING x GIVING result
+              STOP RUN
+            END-PROCEDURE
+        """.trimIndent()
+        val tc = analyzeConsumer(consumerSrc, registry)
+        val codes = tc.diagnostics.errors.map { it.code }
+        assertTrue("E218" in codes,
+            "Async cross-module GIVING capture must error E218, not be silently dropped; got $codes")
+    }
+
+    // F5: version-mismatch was renumbered E215 → E219 so E215 is unambiguously sync-GIVING misuse.
+    @Test fun `IMPORT with mismatched version emits E219`() {
         val registry = buildRegistry(versionedLibSrc)
         val consumerSrc = """
             PROGRAM Consumer
@@ -223,6 +273,7 @@ class CrossModuleTypeCheckTest {
         """.trimIndent()
         val tc = analyzeConsumer(consumerSrc, registry)
         val codes = tc.diagnostics.errors.map { it.code }
-        assertTrue("E215" in codes, "Expected E215 for version mismatch; got $codes")
+        assertTrue("E219" in codes, "Expected E219 for version mismatch; got $codes")
+        assertTrue("E215" !in codes, "E215 must no longer be used for version mismatch (now sync-GIVING only); got $codes")
     }
 }

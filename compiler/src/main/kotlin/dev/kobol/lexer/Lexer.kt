@@ -168,7 +168,10 @@ class Lexer(
                         'n'  -> { seg.append('\n'); advance() }
                         't'  -> { seg.append('\t'); advance() }
                         '\\' -> { seg.append('\\'); advance() }
-                        '"'  -> { seg.append('"');  advance() }
+                        // F4: inside an interpolation body, `\"` is the closing delimiter of a
+                        // nested string (the user escaped the quotes because the whole literal is
+                        // already inside "…"). Elsewhere `\"` is an escaped literal quote.
+                        '"'  -> { if (inInterpolation) { advance(); flush(); return } else { seg.append('"'); advance() } }
                         // \{ and \} = literal braces, the escape hatch for JSON literals
                         // and regex {n,m} quantifiers in an interpolating string (#17).
                         '{'  -> { seg.append('{');  advance() }
@@ -221,6 +224,9 @@ class Lexer(
                 }
                 peek() == ' '  -> advance()
                 peek() == '"'  -> scanString()
+                // F4: `\"` opens a nested string written with escaped quotes — drop the leading
+                // backslash and let scanString read the body (its `\"` close path handles the end).
+                peek() == '\\' && peek(1) == '"' -> { advance(); scanString() }
                 peek().isDigit()              -> scanNumber()
                 peek().isLetter() || peek() == '_' -> scanWord()
                 else -> { atLineStart = false; scanToken() }
@@ -393,6 +399,7 @@ class Lexer(
             "LIST" to TokenType.LIST,
             "MAP" to TokenType.MAP, "MONEY" to TokenType.MONEY,
             "MOVE" to TokenType.MOVE, "MULTIPLY" to TokenType.MULTIPLY,
+            "NEW" to TokenType.NEW,
             "NOSQL" to TokenType.NOSQL,
             "NOT" to TokenType.NOT,
             "OF" to TokenType.OF, "ON" to TokenType.ON, "OPEN" to TokenType.OPEN,

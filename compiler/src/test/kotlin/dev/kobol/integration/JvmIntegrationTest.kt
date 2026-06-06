@@ -44,6 +44,16 @@ class JvmIntegrationTest {
         return runCapturingStdout(programName)
     }
 
+    /** Compile only (no run); return whether compilation succeeded. Diagnostics are swallowed. */
+    private fun compiles(src: String, programName: String = "T"): Boolean {
+        val source = File(outDir, "$programName.kbl").apply { writeText(src.trimIndent()) }
+        val saved = System.out; val savedErr = System.err
+        val sink = PrintStream(ByteArrayOutputStream())
+        System.setOut(sink); System.setErr(sink)
+        return try { compileFile(source, CompilerOptions(source, outDir), ModuleRegistry()) }
+               finally { System.setOut(saved); System.setErr(savedErr) }
+    }
+
     private fun runCapturingStdout(programName: String): String {
         val className = programName.split("-").joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
         val loader = URLClassLoader(arrayOf(outDir.toURI().toURL()), Thread.currentThread().contextClassLoader)
@@ -87,6 +97,48 @@ class JvmIntegrationTest {
             END-PROCEDURE
         """)
         assertTrue("Kobol!" in out)
+    }
+
+    @Test fun `uninitialized top-level MONEY defaults to zero (no NPE)`() {
+        // Top-level DATA item of MONEY/DECIMAL with no initializer must default to
+        // BigDecimal.ZERO — exactly like a MONEY field inside a record (whose no-arg
+        // ctor zero-inits it). Previously it fell to the clinit `else` branch and was
+        // left JVM-null → NullPointerException on first use.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              bal : MONEY
+              rate : DECIMAL(18,8)
+            PROCEDURE Main:
+              DISPLAY bal
+              DISPLAY rate
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("0" in out, "uninit MONEY/DECIMAL should display as zero, got: $out")
+        assertTrue("---done---" in out, "program must run to completion (no NPE), got: $out")
+    }
+
+    @Test fun `uninitialized UUID defaults to Nil UUID (no NPE)`() {
+        // Spec §6: UUID defaults to the Nil UUID. Applies to BOTH a top-level DATA
+        // item (clinit path) AND a UUID field inside a record (no-arg ctor path) —
+        // previously both were left JVM-null → NPE on first use.
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Box:
+              tag : UUID
+            DATA:
+              id : UUID
+              b  : Box
+            PROCEDURE Main:
+              DISPLAY id
+              DISPLAY b.tag
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("00000000-0000-0000-0000-000000000000" in out,
+            "uninit UUID (top-level + record field) should display as Nil UUID, got: $out")
+        assertTrue("---done---" in out, "program must run to completion (no NPE), got: $out")
     }
 
     @Test fun `ADD item TO list then FOR EACH`() {
@@ -726,6 +778,134 @@ class JvmIntegrationTest {
         assertTrue("move 3 7" in out, "named args must bind to declared fields by name, got:\n$out")
     }
 
+    // F1 — nullary variant case by BARE name (no parens): `MOVE Pending TO st`.
+    // Before the fix this went through the Reference path → `E001: Undefined name 'PENDING'`;
+    // only the parenthesised `Pending()` form constructed.
+    @Test fun `nullary variant case by bare name constructs`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            VARIANT OrderStatus IS
+              Pending
+              | Shipped WITH tracking : TEXT
+            DATA:
+              st : OrderStatus
+            PROCEDURE Main:
+              MOVE Pending TO st
+              MATCH st:
+                WHEN Pending:
+                  DISPLAY "is pending"
+                WHEN Shipped WITH tracking:
+                  DISPLAY "shipped {tracking}"
+              END-MATCH
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("is pending" in out, "bare-name nullary variant should construct + match Pending arm, got:\n$out")
+    }
+
+    // F4 — nested string literal inside {…} interpolation, PLAIN quotes (no escaping).
+    // The interpolation body is re-lexed as an expression; a nested `"hi"` must lex + run.
+    @Test fun `nested plain-quote string in interpolation runs`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE Main:
+              DISPLAY "val {UPPERCASE "hi"}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("val HI" in out, "nested plain-quote string in interpolation should run, got:\n$out")
+    }
+
+    // F4 — the escaped form `\"hi\"` inside interpolation must NOT crash the lexer with a
+    // cryptic "Unexpected character: '\'"; it should compile (treated as a nested string).
+    @Test fun `escaped-quote string in interpolation does not crash lexer`() {
+        assertTrue(
+            compiles("""
+                PROGRAM T
+                PROCEDURE Main:
+                  DISPLAY "val {UPPERCASE \"hi\"}"
+                  DISPLAY "---done---"
+                END-PROCEDURE
+            """),
+            "escaped-quote nested string in interpolation should compile, not error on '\\'"
+        )
+    }
+
+    // F12 — construct a 3rd-party / classpath object: `NEW Owner WITH args` → JVM <init>.
+    // Result is JAVA-OBJECT, bound via LET, then used as an instance-CALL receiver.
+    @Test fun `NEW constructs a 3rd-party object with a constructor argument`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              result : TEXT
+            PROCEDURE Main:
+              LET b = NEW SB WITH "hello world"
+              CALL b.toString GIVING result
+              DISPLAY "built: {result}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("built: hello world" in out, "NEW with a String ctor arg should construct + run, got:\n$out")
+    }
+
+    // F12 — no-argument constructor form: `NEW Owner` (no WITH).
+    @Test fun `NEW constructs a 3rd-party object with no arguments`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              result : TEXT
+            PROCEDURE Main:
+              LET b = NEW SB
+              CALL b.toString GIVING result
+              DISPLAY "empty: [{result}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("empty: []" in out, "no-arg NEW should construct an empty StringBuilder, got:\n$out")
+    }
+
+    // F6 (decision lock) — an uninitialized DECIMAL default zero is REPRESENTED identically to an
+    // explicit `= 0`: both `BigDecimal.ZERO` (scale 0), both DISPLAY as "0". Declared scale (18,8)
+    // is a precision budget, not a display-normalization guarantee — and BigDecimal loses no
+    // precision (arithmetic uses max-scale), so prio-4 is satisfied. This test locks that the
+    // default is CONSISTENT with explicit zero; changing only the default would break that.
+    @Test fun `uninitialized DECIMAL default matches explicit zero (F6)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              d  : DECIMAL(18,8)
+              d2 : DECIMAL(18,8) = 0
+            PROCEDURE Main:
+              DISPLAY "uninit=[{d}]"
+              DISPLAY "init0=[{d2}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("uninit=[0]" in out, "uninitialized DECIMAL should default to 0, got:\n$out")
+        assertTrue("init0=[0]" in out, "explicit DECIMAL = 0 should be 0, got:\n$out")
+    }
+
+    // F7 — field-init dedup must preserve the two-phase ordering: a DATA initializer that
+    // REFERENCES a CONFIG value has to run in the main() prologue (AFTER config load), not only
+    // in <clinit> (before config). If the shared helper collapsed the phases, `doubled` would
+    // stay 0 (config unloaded at class-load). Locks the behavior the refactor must keep.
+    @Test fun `DATA initializer referencing CONFIG runs after config load (F7)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            CONFIG:
+              base-rate : INTEGER FROM ENV "F7_BASE_RATE" DEFAULT 10
+            DATA:
+              doubled : INTEGER = base-rate * 2
+            PROCEDURE Main:
+              DISPLAY "doubled={doubled}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("doubled=20" in out, "config-referencing DATA initializer must run post-config (20), got:\n$out")
+    }
+
     // #15 — multi-line struct literal (field per line, no commas).
     @Test fun `multi-line struct literal parses and runs`() {
         val out = compileAndRun("""
@@ -861,6 +1041,58 @@ class JvmIntegrationTest {
         assertTrue("banana 2" in out, "second element should be banana 2, got:\n$out")
     }
 
+    // F2 — `MOVE rec TO rec` must snapshot the source buffer, not alias it. Previously the
+    // destination held the live reference, so mutating the source after the MOVE leaked into
+    // the destination too.
+    @Test fun `MOVE record to record snapshots the value`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            DATA:
+              a : Item
+              b : Item
+            PROCEDURE Main:
+              MOVE "apple" TO a.name
+              MOVE 1 TO a.qty
+              MOVE a TO b
+              MOVE "banana" TO a.name
+              MOVE 2 TO a.qty
+              DISPLAY "b={b.name} {b.qty}"
+              DISPLAY "a={a.name} {a.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("b=apple 1" in out, "MOVE dest must keep its snapshot, got:\n$out")
+        assertTrue("a=banana 2" in out, "source must reflect later mutation, got:\n$out")
+    }
+
+    // F2 — `PUT rec TO map` must snapshot the record value, not alias the live buffer.
+    @Test fun `MAP PUT record value snapshots the value`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            DATA:
+              m   : MAP OF TEXT TO Item
+              buf : Item
+              got : Item
+            PROCEDURE Main:
+              MOVE "apple" TO buf.name
+              MOVE 1 TO buf.qty
+              PUT buf TO m WITH KEY "k"
+              MOVE "banana" TO buf.name
+              MOVE 2 TO buf.qty
+              GET m KEY "k" INTO got
+              DISPLAY "got={got.name} {got.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("got=apple 1" in out, "map value must keep its snapshot, got:\n$out")
+    }
+
     // #12 — MAP PUT/GET previously did not parse at all ("Unexpected token 'PUT'"). Now they
     // are contextual statements over a java.util.Map (LinkedHashMap): PUT inserts/overwrites,
     // GET looks up and unboxes into the target.
@@ -886,5 +1118,52 @@ class JvmIntegrationTest {
         assertTrue("alice=42" in out, "GET after PUT should read 42, got:\n$out")
         assertTrue("bob=7" in out, "GET second key should read 7, got:\n$out")
         assertTrue("alice2=99" in out, "PUT on an existing key should overwrite, got:\n$out")
+    }
+
+    // F3 — verify the spec §13 collection ops that DO run: LENGTH on both a list and a map.
+    @Test fun `LENGTH on list and map runs`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              xs : LIST OF INTEGER
+              m  : MAP OF TEXT TO INTEGER
+              n  : INTEGER = 0
+            PROCEDURE Main:
+              ADD 10 TO xs
+              ADD 20 TO xs
+              PUT 1 TO m WITH KEY "a"
+              PUT 2 TO m WITH KEY "b"
+              PUT 3 TO m WITH KEY "c"
+              COMPUTE n = LENGTH xs
+              DISPLAY "list={n}"
+              COMPUTE n = LENGTH m
+              DISPLAY "map={n}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("list=2" in out, "LENGTH on a list, got:\n$out")
+        assertTrue("map=3"  in out, "LENGTH on a map, got:\n$out")
+    }
+
+    // F3 — the spec §13 ops that were documented but NEVER implemented (no parser support):
+    // `ADD … AT FIRST`, `REMOVE … FROM <list>`, `REMOVE <map> KEY k`. Cut from the spec.
+    // This guards against a silent half-implementation re-appearing as a documented landmine.
+    @Test fun `unimplemented collection ops are rejected (spec §13 cut)`() {
+        for (stmt in listOf(
+            "ADD 1 TO xs AT FIRST",
+            "REMOVE 1 FROM xs",
+            "REMOVE m KEY \"a\"",
+        )) {
+            val ok = compiles("""
+                PROGRAM T
+                DATA:
+                  xs : LIST OF INTEGER
+                  m  : MAP OF TEXT TO INTEGER
+                PROCEDURE Main:
+                  $stmt
+                END-PROCEDURE
+            """)
+            assertTrue(!ok, "expected '$stmt' to be rejected (unimplemented), but it compiled")
+        }
     }
 }

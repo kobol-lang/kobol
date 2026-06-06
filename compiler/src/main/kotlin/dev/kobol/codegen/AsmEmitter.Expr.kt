@@ -146,6 +146,18 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
                 }
             }
 
+            is NewExpr -> {
+                // F12: NEW Owner WITH args → JVM allocation + constructor. Owner resolved via the
+                // shared CALL owner maps; arg descriptors inferred Kobol-side (no classpath read —
+                // overload disambiguation waits on E2/F13). Leaves the new instance on the stack.
+                val owner = resolveConstructorOwner(expr.owner.split("."))
+                mv.visitTypeInsn(NEW, owner)
+                mv.visitInsn(DUP)
+                expr.args.forEach { emitExpr(ctx, it) }
+                val argDesc = expr.args.joinToString("") { jvmDescriptor(inferExprType(it)) }
+                mv.visitMethodInsn(INVOKESPECIAL, owner, "<init>", "($argDesc)V", false)
+            }
+
             is NamedArgument -> emitExpr(ctx, expr.value)
 
             is PipelineExpr -> emitPipeline(ctx, expr)
@@ -446,7 +458,19 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
             "TRIM"       -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "trim",       SretS, false) }
             "TRIM-LEFT", "TRIM-START"  -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "trimStart", SretS, false) }
             "TRIM-RIGHT", "TRIM-END"   -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "trimEnd",   SretS, false) }
-            "LENGTH"     -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "length", "($S)J", false) }
+            "LENGTH"     -> {
+                // LENGTH dispatches on the operand: String → char count; List/Map → element count.
+                // Prose `LENGTH xs` previously always emitted String.length → VerifyError on a
+                // collection (F3: spec §13 promised `LENGTH <list>`/`<map>` but only the field
+                // form `xs.LENGTH` worked). Returns long, matching the String path + field form.
+                val t = if (args.isNotEmpty()) inferExprType(args[0]) else KobolType.UnknownType
+                emitExpr(ctx, args[0])
+                when (t) {
+                    is KobolType.ListType -> { mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Collection", "size", "()I", true); mv.visitInsn(I2L) }
+                    is KobolType.MapType  -> { mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map",        "size", "()I", true); mv.visitInsn(I2L) }
+                    else                  -> mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "length", "($S)J", false)
+                }
+            }
             "IS-BLANK"   -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "isBlank",   "($S)Z", false) }
             "IS-EMPTY"   -> {
                 val t = if (args.isNotEmpty()) inferExprType(args[0]) else KobolType.UnknownType
@@ -702,6 +726,15 @@ internal fun AsmEmitter.loadRef(ctx: MethodContext, ref: Reference) {
         if (constExpr != null) {
             emitExpr(ctx, constExpr)
             return
+        }
+        // F1: bare-name nullary VARIANT case construction (`MOVE Pending TO st`) — mirrors the
+        // call-form path in emitBuiltin. A real local of the same name shadows it (guarded).
+        if (ref.parts.size == 1 && ctx.getLocal(name) == null) {
+            val caseEntry = variantCaseIndex[name.uppercase()]
+            if (caseEntry != null && caseEntry.second.fields.isEmpty()) {
+                emitVariantConstruction(ctx, caseEntry.first, caseEntry.second, emptyList())
+                return
+            }
         }
         val local = ctx.getLocal(name)
         if (local != null) {
