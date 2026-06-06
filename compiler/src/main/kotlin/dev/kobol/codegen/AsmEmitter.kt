@@ -47,6 +47,12 @@ class AsmEmitter(
     internal var emitsLog = false
     internal val namedConditions = mutableMapOf<String, Expression>()
     /**
+     * Variant case construction index: UPPERCASE case name → (variant type name, the case decl).
+     * Lets [emitBuiltin] recognise `Shipped("X")` / `Shipped(tracking: "X")` as a variant
+     * construction (NEW + ctor) rather than an unknown stdlib call. Populated in [emit].
+     */
+    internal var variantCaseIndex: Map<String, Pair<String, VariantCase>> = emptyMap()
+    /**
      * Import alias → JVM binary class name (slash-separated, original case).
      * Built from `program.imports` each time [emit] is called.
      * Keys are UPPERCASE to match Kobol's identifier normalisation.
@@ -86,6 +92,9 @@ class AsmEmitter(
         pendingEndpoints.clear()
         pendingEndpointMethods.clear()
         for (cond in program.namedConditions) namedConditions[cond.name] = cond.expr
+        variantCaseIndex = buildMap {
+            for (v in program.variants) for (c in v.cases) put(c.name.uppercase(), v.name to c)
+        }
         dataSectionNames = program.dataSection?.items?.map { it.name }?.toSet() ?: emptySet()
         constantExprs.clear()
         for (c in program.constants) constantExprs[c.name] = c.value
@@ -178,11 +187,42 @@ class AsmEmitter(
         // toString
         emitRecordToString(cw, name, rec)
 
+        // Synthetic shallow-copy method for value semantics (#23): `ADD buf TO list`
+        // must snapshot the buffer, not alias it.
+        emitRecordCopy(cw, name, rec)
+
         // Synthetic boolean predicate methods for each CONDITION (e.g. HighValue WHEN balance > 50000)
         emitRecordConditionMethods(cw, rec, outerName)
 
         cw.visitEnd()
         return cw.toByteArray()
+    }
+
+    /**
+     * Emit `public <Record> copy()` — a shallow clone (new instance, each field copied
+     * across by value/reference). Records are mutable buffers, so appending one to a LIST
+     * or assigning it must snapshot it; otherwise later mutation of the buffer is visible
+     * through every stored reference (#23). Shallow is correct: nested records are
+     * themselves copied at their own copy sites; scalars are immutable.
+     */
+    private fun emitRecordCopy(cw: ClassWriter, name: String, rec: RecordDecl) {
+        val m = cw.visitMethod(ACC_PUBLIC, "copy", "()L$name;", null, null)
+        m.visitCode()
+        m.visitTypeInsn(NEW, name)
+        m.visitInsn(DUP)
+        m.visitMethodInsn(INVOKESPECIAL, name, "<init>", "()V", false)
+        m.visitVarInsn(ASTORE, 1)                       // local 1 = fresh instance
+        for (f in rec.fields) {
+            val desc = jvmDescriptor(checker.toKobolType(f.type))
+            m.visitVarInsn(ALOAD, 1)                    // target
+            m.visitVarInsn(ALOAD, 0)                    // this
+            m.visitFieldInsn(GETFIELD, name, javaIdent(f.name), desc)
+            m.visitFieldInsn(PUTFIELD, name, javaIdent(f.name), desc)
+        }
+        m.visitVarInsn(ALOAD, 1)
+        m.visitInsn(ARETURN)
+        m.visitMaxs(0, 0)
+        m.visitEnd()
     }
 
     private fun emitRecordToString(cw: ClassWriter, className: String, rec: RecordDecl) {
@@ -260,6 +300,8 @@ class AsmEmitter(
                     emitExpr(ctx, item.initializer)
                     if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
                         coerceToDecimalIfNeeded(clinit, inferExprType(item.initializer))
+                    } else {
+                        coerceIntToTarget(clinit, inferExprType(item.initializer), kType)
                     }
                     clinit.visitFieldInsn(PUTSTATIC, outerName, javaIdent(item.name), recDesc(outerName, kType))
                 } else {
@@ -548,6 +590,8 @@ class AsmEmitter(
                 emitExpr(ctx, item.initializer)
                 if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
                     coerceToDecimalIfNeeded(mv, inferExprType(item.initializer))
+                } else {
+                    coerceIntToTarget(mv, inferExprType(item.initializer), kType)
                 }
                 mv.visitFieldInsn(PUTSTATIC, owner, javaIdent(item.name), recDesc(owner, kType))
             }
@@ -577,6 +621,8 @@ class AsmEmitter(
             is ComputeStatement  -> emitCompute(ctx, stmt)
             is LocalVarDecl      -> emitLocalVarDecl(ctx, stmt)
             is MoveStatement     -> emitMove(ctx, stmt)
+            is MapPutStatement   -> emitMapPut(ctx, stmt)
+            is MapGetStatement   -> emitMapGet(ctx, stmt)
             is AddStatement      -> emitArith(ctx, stmt.target, "+", stmt.operand, stmt.giving)
             is SubtractStatement -> emitArith(ctx, stmt.from, "-", stmt.operand, stmt.giving)
             is MultiplyStatement -> emitArith(ctx, stmt.right, "*", stmt.left, stmt.giving)

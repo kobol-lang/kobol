@@ -169,6 +169,10 @@ class Lexer(
                         't'  -> { seg.append('\t'); advance() }
                         '\\' -> { seg.append('\\'); advance() }
                         '"'  -> { seg.append('"');  advance() }
+                        // \{ and \} = literal braces, the escape hatch for JSON literals
+                        // and regex {n,m} quantifiers in an interpolating string (#17).
+                        '{'  -> { seg.append('{');  advance() }
+                        '}'  -> { seg.append('}');  advance() }
                         else ->   seg.append('\\')
                     }
                 }
@@ -384,7 +388,8 @@ class Lexer(
             "IF" to TokenType.IF, "IMPORT" to TokenType.IMPORT, "IN" to TokenType.IN,
             "INPUT" to TokenType.INPUT, "INTEGER" to TokenType.INTEGER,
             "INTO" to TokenType.INTO, "IS" to TokenType.IS,
-            "KEY" to TokenType.KEY, "LABEL" to TokenType.LABEL, "LET" to TokenType.LET,
+            "KEY" to TokenType.KEY, "PUT" to TokenType.PUT, "GET" to TokenType.GET,
+            "LABEL" to TokenType.LABEL, "LET" to TokenType.LET,
             "LIST" to TokenType.LIST,
             "MAP" to TokenType.MAP, "MONEY" to TokenType.MONEY,
             "MOVE" to TokenType.MOVE, "MULTIPLY" to TokenType.MULTIPLY,

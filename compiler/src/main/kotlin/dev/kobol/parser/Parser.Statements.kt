@@ -52,6 +52,31 @@ internal fun Parser.parseMoveStatement(): Statement {
         return MoveStatement(from, to, p)
     }
 
+    // PUT value TO map WITH KEY key   (#12 — MAP insert/update)
+    internal fun Parser.parseMapPutStatement(): MapPutStatement {
+        val p = currentPos()
+        expect(PUT, "Expected PUT")
+        val value = parseExpression()
+        expect(TO, "Expected TO after value in PUT")
+        val map = parseReference()
+        expect(WITH, "Expected WITH in PUT … WITH KEY")
+        expect(KEY, "Expected KEY in PUT … WITH KEY")
+        val key = parseExpression()
+        return MapPutStatement(value, map, key, p)
+    }
+
+    // GET map KEY key INTO dest        (#12 — MAP lookup)
+    internal fun Parser.parseMapGetStatement(): MapGetStatement {
+        val p = currentPos()
+        expect(GET, "Expected GET")
+        val map = parseReference()
+        expect(KEY, "Expected KEY in GET map KEY … INTO")
+        val key = parseExpression()
+        expect(INTO, "Expected INTO in GET map KEY … INTO")
+        val into = parseReference()
+        return MapGetStatement(map, key, into, p)
+    }
+
     // COMPUTE/LET target = expr  |  LET name : type = expr  (local var decl)
 internal fun Parser.parseComputeOrLet(): Statement {
         val p       = currentPos()
@@ -105,12 +130,25 @@ internal fun Parser.parseMultiplyStatement(): Statement {
         return MultiplyStatement(left, right, giving, p)
     }
 
-    // DIVIDE divisor INTO target [GIVING result] [USING mode]
+    // Two readable directions, both → result = target / divisor:
+    //   COBOL form : DIVIDE <divisor> INTO <target>  [GIVING result] [USING mode]
+    //   English    : DIVIDE <dividend> BY <divisor>  [GIVING result] [USING mode]
 internal fun Parser.parseDivideStatement(): Statement {
         val p = currentPos(); expect(DIVIDE, "Expected DIVIDE")
-        val divisor = parseExpression()
-        expect(INTO, "Expected INTO in DIVIDE")
-        val target  = parseReference()
+        val first = parseExpression()
+        val divisor: Expression
+        val target: Reference
+        when {
+            match(INTO) -> { divisor = first; target = parseReference() }
+            matchKeywordValue("BY") -> {
+                // English direction: `first` is the dividend (becomes the arith target),
+                // the operand after BY is the divisor.
+                target  = first as? Reference
+                    ?: throw error("DIVIDE ... BY requires a variable name before BY")
+                divisor = parseExpression()
+            }
+            else -> throw error("Expected INTO or BY in DIVIDE (got '${peek().value}')")
+        }
         val giving  = if (match(GIVING)) parseReference() else null
         val mode    = if (match(USING)) {
             when {
@@ -135,13 +173,17 @@ internal fun Parser.parseDisplayStatement(): Statement {
         if (peek().value == "TABLE" || peek().value == "LABEL" || peek().value == "FORMAT" || peek().value == "JSON" || peek().value == "STYLED" || peek().value == "XML") {
             val func = advance().value
             if (func == "JSON") {
+                // PRETTY accepted on either side of the expression:
+                //   DISPLAY JSON PRETTY x   (legacy)   and   DISPLAY JSON x PRETTY (spec §26)
                 val pretty = matchKeywordValue("PRETTY")
                 val expr = parseExpression()
-                values.add(BuiltinCall(if (pretty) "DISPLAY_JSON_PRETTY" else "DISPLAY_JSON", listOf(expr), p))
+                val prettyAfter = matchKeywordValue("PRETTY")
+                values.add(BuiltinCall(if (pretty || prettyAfter) "DISPLAY_JSON_PRETTY" else "DISPLAY_JSON", listOf(expr), p))
             } else if (func == "XML") {
                 val pretty = matchKeywordValue("PRETTY")
                 val expr = parseExpression()
-                values.add(BuiltinCall(if (pretty) "DISPLAY_XML_PRETTY" else "DISPLAY_XML", listOf(expr), p))
+                val prettyAfter = matchKeywordValue("PRETTY")
+                values.add(BuiltinCall(if (pretty || prettyAfter) "DISPLAY_XML_PRETTY" else "DISPLAY_XML", listOf(expr), p))
             } else if (func == "STYLED") {
                 val text = parseExpression()
                 var bold = false

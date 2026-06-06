@@ -48,6 +48,26 @@ internal val STDLIB_OWNERS = mapOf(
     "jdbc"           to "dev/kobol/stdlib/KobolJdbc",
 )
 
+/**
+ * `java.lang.*` classes auto-imported for a bare single-part `CALL` (spec §8.11),
+ * e.g. `CALL System.currentTimeMillis GIVING t` without an explicit IMPORT.
+ * Keyed by UPPERCASE owner alias → JVM binary name (original case).
+ *
+ * Deliberately excludes classes whose names collide with Kobol type keywords
+ * (`String`, `Integer`, `Long`, `Double`, `Boolean`) — those lex as type tokens,
+ * not identifiers, so a bare `CALL Integer.parseInt` cannot reach here anyway.
+ * Use an explicit `IMPORT java.lang.Integer AS …` for those.
+ */
+internal val JAVA_LANG_OWNERS = mapOf(
+    "SYSTEM"        to "java/lang/System",
+    "MATH"          to "java/lang/Math",
+    "THREAD"        to "java/lang/Thread",
+    "RUNTIME"       to "java/lang/Runtime",
+    "OBJECT"        to "java/lang/Object",
+    "STRINGBUILDER" to "java/lang/StringBuilder",
+    "CHARACTER"     to "java/lang/Character",
+)
+
 // NoSQL + Cache
 internal const val KOBOL_MONGO = "dev/kobol/stdlib/KobolMongo"
 internal const val KOBOL_REDIS = "dev/kobol/stdlib/KobolRedis"

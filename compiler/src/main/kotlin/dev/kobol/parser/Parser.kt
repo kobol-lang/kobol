@@ -25,6 +25,14 @@ class Parser(
     internal val tokens: List<Token> = rawTokens.filter { it.type != NEWLINE }
     internal var pos = 0
 
+    /**
+     * When true, `parsePipelineOrPrimary` does NOT consume trailing pipeline stages
+     * (FILTER/TRANSFORM/SUM/SORT/TAKE). Set while parsing a FILTER predicate so a condition
+     * like `NOT paid` does not greedily absorb the enclosing pipeline's `TRANSFORM TO amount
+     * SUM` stages into the predicate.
+     */
+    internal var suppressPipelineStages = false
+
     companion object {
         /**
          * Keyword token types that can also appear as inline builtin function calls
@@ -87,6 +95,7 @@ class Parser(
     internal fun parseFullProgram(): Program {
         val startPos = currentPos()
         expect(PROGRAM, "Expected PROGRAM")
+        val nameRaw = peek().rawValue   // original source case, e.g. "DataTypes"
         val name    = expectIdent("Expected program name")
         // VERSION/AUTHOR may appear on the next line (indented) — consume leading INDENT
         while (check(INDENT) || check(DEDENT)) advance()
@@ -157,7 +166,7 @@ class Parser(
 
         return Program(name, version, author, imports, records, constants, dataSection, fileSection, procedures, startPos,
             configSection = configSection, variants = variantDecls, typeAliases = typeAliases, tests = testDecls,
-            namedConditions = namedConditions, moduleDecl = moduleDecl, tableTests = tableTests)
+            namedConditions = namedConditions, moduleDecl = moduleDecl, tableTests = tableTests, rawName = nameRaw)
     }
 
     // -------------------------------------------------------------------------
@@ -250,6 +259,8 @@ class Parser(
             DELETE     -> parseNoSqlDeleteStatement()
             COUNT      -> parseNoSqlCountStatement()
             CACHE      -> parseCacheStatement()
+            PUT        -> parseMapPutStatement()   // #12 — MAP insert/update
+            GET        -> parseMapGetStatement()   // #12 — MAP lookup
             else -> null
         }
     }

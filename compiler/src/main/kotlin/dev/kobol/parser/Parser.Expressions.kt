@@ -85,8 +85,9 @@ internal fun Parser.parseUnaryExpr(): Expression {
 
 internal fun Parser.parsePipelineOrPrimary(): Expression {
         var expr = parsePrimary()
-        // Pipeline stages follow the collection expression
-        while (check(FILTER) || check(TRANSFORM) || check(SUM) || check(SORT) || check(TAKE)) {
+        // Pipeline stages follow the collection expression — but not while parsing a FILTER
+        // predicate (else `NOT paid` would swallow the enclosing `TRANSFORM TO amount SUM`).
+        while (!suppressPipelineStages && (check(FILTER) || check(TRANSFORM) || check(SUM) || check(SORT) || check(TAKE))) {
             expr = parsePipelineStages(expr)
         }
         return expr
@@ -100,15 +101,13 @@ internal fun Parser.parsePipelineStages(source: Expression): Expression {
                 check(FILTER) -> {
                     val sp = currentPos(); advance()
                     if (check(WHERE)) advance()
-                    // Parse condition without letting it consume subsequent pipeline keywords.
-                    // If the recursive parse returns a PipelineExpr, lift those stages up.
-                    val condOrPipeline = parseExpression()
-                    if (condOrPipeline is PipelineExpr) {
-                        stages.add(PipelineStage.FilterStage(condOrPipeline.source, sp))
-                        stages.addAll(condOrPipeline.stages)
-                    } else {
-                        stages.add(PipelineStage.FilterStage(condOrPipeline, sp))
-                    }
+                    // Parse the predicate without letting it consume the enclosing pipeline's
+                    // trailing stages (TRANSFORM/SUM/…) — those belong to this pipeline, not the
+                    // condition. e.g. `FILTER WHERE NOT paid TRANSFORM TO amount SUM`.
+                    val prev = suppressPipelineStages
+                    suppressPipelineStages = true
+                    val cond = try { parseExpression() } finally { suppressPipelineStages = prev }
+                    stages.add(PipelineStage.FilterStage(cond, sp))
                 }
                 check(TRANSFORM) -> {
                     val sp = currentPos(); advance()
@@ -136,8 +135,77 @@ internal fun Parser.parsePipelineStages(source: Expression): Expression {
         return if (stages.isEmpty()) source else PipelineExpr(source, stages, p)
     }
 
+/** Tokens that can begin an expression atom — used to detect prose-builtin arguments. #5 */
+internal fun Parser.canStartExprAtom(): Boolean = when (peek().type) {
+    STRING_LIT, INTEGER_LIT, DECIMAL_LIT, INTERP_START, TRUE, FALSE,
+    IDENTIFIER, LPAREN, MINUS, NOT, COMBINE, FIND -> true
+    else -> false
+}
+
+/** Single-argument prose string builtins: `UPPERCASE name` etc. (spec §11). */
+private val PROSE_UNARY_BUILTINS = setOf("UPPERCASE", "LOWERCASE", "TRIM", "REVERSE", "LENGTH")
+
+/**
+ * Parse the English-prose forms of the string builtins (spec §11) — the readability thesis.
+ * The `FUNC(args)` call form still works (handled later in [parsePrimary]); these are additions:
+ *   UPPERCASE x | LOWERCASE x | TRIM x | REVERSE x | LENGTH x
+ *   SUBSTRING x FROM start FOR len
+ *   FIND needle IN haystack          (lowers to FIND(haystack, needle))
+ *   COMBINE a b c …                  (variadic, greedy until the atom run ends)
+ * Returns null when the current tokens are not a prose builtin, so [parsePrimary] continues.
+ * Arguments are parsed at unary precedence so binary operators bind to the enclosing expression
+ * (e.g. `LENGTH name + 1` → `LENGTH(name) + 1`).
+ */
+internal fun Parser.parseProseStringOp(): Expression? {
+    val p   = currentPos()
+    val tok = peek()
+
+    // COMBINE / FIND are keyword tokens; their call form `COMBINE(...)`/`FIND(...)` is left to
+    // parsePrimary (guard on the following `(`). Lookahead is non-consuming — only commit (advance)
+    // once a prose form is certain, so a non-match leaves the token stream untouched.
+    if (tok.type == COMBINE && peek(1).type != LPAREN && canStartExprAtomAt(1)) {
+        advance()  // COMBINE
+        val args = mutableListOf(parseUnaryExpr())
+        while (canStartExprAtom()) args.add(parseUnaryExpr())
+        return BuiltinCall("COMBINE", args, p)
+    }
+    if (tok.type == FIND && peek(1).type != LPAREN && canStartExprAtomAt(1)) {
+        advance()  // FIND
+        val needle = parseUnaryExpr()
+        expect(IN, "Expected IN in `FIND <needle> IN <text>`")
+        val haystack = parseUnaryExpr()
+        return BuiltinCall("FIND", listOf(haystack, needle), p)   // call form is FIND(haystack, needle)
+    }
+    if (tok.type != IDENTIFIER || peek(1).type == LPAREN) return null
+    val name = tok.value
+    if (name == "SUBSTRING" && canStartExprAtomAt(1)) {
+        advance()  // SUBSTRING
+        val s = parseUnaryExpr()
+        expect(FROM, "Expected FROM in `SUBSTRING <text> FROM <start> FOR <len>`")
+        val start = parseUnaryExpr()
+        expect(FOR, "Expected FOR in `SUBSTRING <text> FROM <start> FOR <len>`")
+        val len = parseUnaryExpr()
+        return BuiltinCall("SUBSTRING", listOf(s, start, len), p)
+    }
+    if (name in PROSE_UNARY_BUILTINS && canStartExprAtomAt(1)) {
+        advance()  // consume the builtin name
+        return BuiltinCall(name, listOf(parseUnaryExpr()), p)
+    }
+    return null
+}
+
+/** Lookahead variant of [canStartExprAtom] for the token at [offset] without consuming. */
+internal fun Parser.canStartExprAtomAt(offset: Int): Boolean = when (peek(offset).type) {
+    STRING_LIT, INTEGER_LIT, DECIMAL_LIT, INTERP_START, TRUE, FALSE,
+    IDENTIFIER, LPAREN, MINUS, NOT, COMBINE, FIND -> true
+    else -> false
+}
+
 internal fun Parser.parsePrimary(): Expression {
         val p = currentPos()
+
+        // Prose string builtins (spec §11) — UPPERCASE x, SUBSTRING x FROM..FOR.., FIND..IN.., COMBINE a b
+        parseProseStringOp()?.let { return it }
 
         // Literals
         parseLiteral()?.let { return it }
@@ -155,15 +223,19 @@ internal fun Parser.parsePrimary(): Expression {
             val typeName = advance().value
             advance() // {
             val fields = mutableListOf<RecordLiteralField>()
+            // #15 — allow multi-line struct literals. Indented field-per-line layout emits
+            // INDENT/DEDENT (and NEWLINE, already filtered) tokens between fields; skip them
+            // so a field name on its own line is not read as `got ''`. Commas stay optional.
+            fun skipLayout() { while (check(INDENT) || check(DEDENT) || check(NEWLINE)) advance() }
+            skipLayout()
             while (!check(RBRACE) && !isAtEnd()) {
-                skipWs()
                 val fp   = currentPos()
                 val name = expectIdent("Expected field name")
                 expect(COLON, "Expected ':' in struct literal")
                 val v    = parseExpression()
                 fields.add(RecordLiteralField(name, v, fp))
                 if (check(COMMA)) advance()
-                skipWs()
+                skipLayout()
             }
             expect(RBRACE, "Expected '}' to close struct literal")
             return RecordLiteralExpr(typeName, fields, p)
@@ -177,8 +249,8 @@ internal fun Parser.parsePrimary(): Expression {
                 advance()
                 val args = mutableListOf<Expression>()
                 if (!check(RPAREN)) {
-                    args.add(parseExpression())
-                    while (check(COMMA)) { advance(); args.add(parseExpression()) }
+                    args.add(parseCallArg())                               // #18 — accept `field: value` named args
+                    while (check(COMMA)) { advance(); args.add(parseCallArg()) }
                 }
                 expect(RPAREN, "Expected ')'")
                 return BuiltinCall(name, args, p)
@@ -198,8 +270,8 @@ internal fun Parser.parsePrimary(): Expression {
                 advance() // (
                 val args = mutableListOf<Expression>()
                 if (!check(RPAREN)) {
-                    args.add(parseExpression())
-                    while (check(COMMA)) { advance(); args.add(parseExpression()) }
+                    args.add(parseCallArg())                               // #18 — accept named args here too
+                    while (check(COMMA)) { advance(); args.add(parseCallArg()) }
                 }
                 expect(RPAREN, "Expected ')'")
                 return BuiltinCall(name, args, p)

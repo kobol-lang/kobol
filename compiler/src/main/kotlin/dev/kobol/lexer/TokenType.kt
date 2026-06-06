@@ -16,7 +16,7 @@ enum class TokenType {
     FALSE, FILES, FILTER, FOR, FROM, FUTURE,
     GIVING,
     IF, IMPORT, IN, INPUT, INTEGER, INTO, IS,
-    KEY,
+    KEY, PUT, GET,
     LABEL, LET, LIST, LOG,
     MAP, MATCH, MONEY, MOVE, MULTIPLY, MUST,
     NOT,

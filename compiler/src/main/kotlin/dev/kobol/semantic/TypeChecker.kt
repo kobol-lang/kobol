@@ -31,6 +31,9 @@ class TypeChecker(
     /** Type aliases from DEFINE TYPE declarations: alias name → resolved KobolType. */
     private val typeAliases = mutableMapOf<String, KobolType>()
 
+    /** Variant case construction index: UPPERCASE case name → (variant name, case info). #18 */
+    private val variantCaseIndex = mutableMapOf<String, Pair<String, Symbol.VariantSymbol.CaseInfo>>()
+
     /** Type annotations attached to every Expression node (keyed by identity). */
     private val exprTypes = IdentityHashMap<Expression, KobolType>()
 
@@ -184,6 +187,7 @@ class TypeChecker(
                 Symbol.VariantSymbol.CaseInfo(case.name, fields)
             }
             symbols.define(Symbol.VariantSymbol(variantDecl.name, cases, variantDecl.pos))
+            for (c in cases) variantCaseIndex[c.name.uppercase()] = variantDecl.name to c   // #18
         }
 
         // Records
@@ -227,6 +231,21 @@ class TypeChecker(
             }
             val kType = if (item.type != null) toKobolType(item.type)
                         else item.initializer?.let { inferType(it) } ?: KobolType.UnknownType
+            // #19: temporal types have NO implicit default (the spec no longer
+            // promises "current date" — that was COBOL hidden state, §1.7). An
+            // uninitialized DATE/TIME/DATETIME is null and NPEs on first use, so
+            // flag it at the declaration site instead of leaving a runtime landmine.
+            if (item.initializer == null &&
+                (kType is KobolType.DateType || kType is KobolType.TimeType || kType is KobolType.DateTimeType)) {
+                val tn = when (kType) {
+                    is KobolType.DateType     -> "DATE"
+                    is KobolType.TimeType     -> "TIME"
+                    is KobolType.DateTimeType -> "DATETIME"
+                }
+                warning("W019", "'${item.name}' ($tn) has no initializer and no implicit default; it is null " +
+                    "until assigned. Initialize it explicitly (e.g. `${item.name} : DATE = TODAY`) to avoid a " +
+                    "NullPointerException on first use.", item.pos)
+            }
             symbols.define(Symbol.Variable(item.name, kType, mutable = true, pos = item.pos))
         }
 
@@ -287,6 +306,8 @@ class TypeChecker(
         when (stmt) {
             is MoveStatement     -> checkMove(stmt)
             is ComputeStatement  -> checkCompute(stmt)
+            is MapPutStatement   -> checkMapPut(stmt)
+            is MapGetStatement   -> checkMapGet(stmt)
             is LocalVarDecl      -> checkLocalVarDecl(stmt)
             is AddStatement      -> checkArithAssign(stmt.operand, stmt.target, stmt.giving, stmt.pos)
             is SubtractStatement -> checkArithAssign(stmt.operand, stmt.from, stmt.giving, stmt.pos)
@@ -747,6 +768,38 @@ class TypeChecker(
         }
     }
 
+    // PUT value TO map WITH KEY key  (#12)
+    private fun checkMapPut(stmt: MapPutStatement) {
+        val mapType = resolveRefType(stmt.map)
+        if (mapType !is KobolType.MapType) {
+            if (mapType != KobolType.UnknownType)
+                error("E027", "PUT … TO requires a MAP target, got $mapType", stmt.pos)
+            checkExpr(stmt.key); checkExpr(stmt.value); return
+        }
+        val keyType = checkExpr(stmt.key)
+        if (keyType != KobolType.UnknownType && !keyType.isAssignableTo(mapType.keyType))
+            error("E028", "MAP key type mismatch: expected ${mapType.keyType}, got $keyType", stmt.pos)
+        val valType = checkExpr(stmt.value)
+        if (valType != KobolType.UnknownType && !valType.isAssignableTo(mapType.valueType))
+            error("E029", "MAP value type mismatch: expected ${mapType.valueType}, got $valType", stmt.pos)
+    }
+
+    // GET map KEY key INTO dest  (#12)
+    private fun checkMapGet(stmt: MapGetStatement) {
+        val mapType  = resolveRefType(stmt.map)
+        val intoType = resolveRefType(stmt.into)
+        if (mapType !is KobolType.MapType) {
+            if (mapType != KobolType.UnknownType)
+                error("E027", "GET … requires a MAP source, got $mapType", stmt.pos)
+            checkExpr(stmt.key); return
+        }
+        val keyType = checkExpr(stmt.key)
+        if (keyType != KobolType.UnknownType && !keyType.isAssignableTo(mapType.keyType))
+            error("E028", "MAP key type mismatch: expected ${mapType.keyType}, got $keyType", stmt.pos)
+        if (intoType != KobolType.UnknownType && !mapType.valueType.isAssignableTo(intoType))
+            error("E030", "GET target of type $intoType cannot hold MAP value ${mapType.valueType}", stmt.pos)
+    }
+
     private fun checkPerform(stmt: PerformStatement) {
         // Cross-module call: PERFORM Alias.ProcedureName USING ...
         if (stmt.moduleAlias != null) {
@@ -953,10 +1006,37 @@ class TypeChecker(
             "DISPLAY_STYLED",
             "DISPLAY_XML", "DISPLAY_XML_PRETTY"             -> KobolType.VoidType
             else -> {
+                // Variant case construction: Shipped("X") / Shipped(tracking: "X") — #18
+                val caseEntry = variantCaseIndex[expr.name.uppercase()]
+                if (caseEntry != null) {
+                    checkVariantConstruction(expr, caseEntry.first, caseEntry.second)
+                    return KobolType.VariantRefType(caseEntry.first)
+                }
                 // Check if this is a user-defined procedure call in expression context
                 val procSym = symbols.resolve(expr.name) as? Symbol.ProcedureSymbol
                     ?: symbols.resolve(expr.name.uppercase()) as? Symbol.ProcedureSymbol
                 procSym?.returnType ?: KobolType.UnknownType
+            }
+        }
+    }
+
+    /** Validate a VARIANT case construction call — arity (positional) or field names (named). #18 */
+    private fun checkVariantConstruction(expr: BuiltinCall, variantName: String, case: Symbol.VariantSymbol.CaseInfo) {
+        val fieldNames = case.fields.keys
+        val named = expr.args.filterIsInstance<NamedArgument>()
+        when {
+            named.isEmpty() -> {
+                if (expr.args.size != fieldNames.size)
+                    error("E023", "Variant case '${case.name}' takes ${fieldNames.size} field(s), got ${expr.args.size}", expr.pos)
+            }
+            named.size != expr.args.size ->
+                error("E023", "Variant case '${case.name}' construction cannot mix positional and named arguments", expr.pos)
+            else -> {
+                val upperFields = fieldNames.map { it.uppercase() }.toSet()
+                for (a in named) if (a.paramName.uppercase() !in upperFields)
+                    error("E025", "Variant case '${case.name}' has no field '${a.paramName}'", a.pos)
+                for (fn in fieldNames) if (named.none { it.paramName.equals(fn, ignoreCase = true) })
+                    error("E026", "Variant case '${case.name}' construction missing field '$fn'", expr.pos)
             }
         }
     }

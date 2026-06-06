@@ -244,8 +244,12 @@ internal fun compileFile(
     if (options.showDeps) features.printSummary(program.name)
 
     // -- Code generation ---------------------------------------------------
-    val javaClass = (options.sourceFile?.nameWithoutExtension ?: program.name)
-        .split("-").joinToString("") { it.lowercase().replaceFirstChar { c -> c.uppercase() } }
+    // #1: honor the PROGRAM name (original source case) for the generated class —
+    // it is intentional and right there. Fall back to the file name only if the
+    // PROGRAM name is somehow blank. Sanitize either source to a legal Java
+    // identifier (kebab → PascalCase, illegal leading char → prefixed).
+    val rawClassName = program.rawName.ifBlank { options.sourceFile?.nameWithoutExtension ?: program.name }
+    val javaClass = sanitizeJavaClassName(rawClassName)
     val outDir = options.outputDir
     outDir.mkdirs()
 
@@ -268,6 +272,28 @@ internal fun compileFile(
         if (options.verbose) println("[deps] manifest written to ${manifest.path}")
     }
     return true
+}
+
+/**
+ * Turn a PROGRAM name (or file stem) into a legal Java class identifier (#1).
+ *
+ * - Splits on any non-alphanumeric run (`-`, `_`, spaces) and PascalCases each
+ *   segment, preserving its interior case so `DataTypes` stays `DataTypes` and
+ *   `data-types` becomes `DataTypes`.
+ * - A leading digit (e.g. file `01-data-types`) is illegal as the first char of a
+ *   Java identifier, so the result is prefixed with `_` rather than emitting an
+ *   unrunnable class like `01DataTypes`.
+ * - Falls back to `Program` if nothing usable remains.
+ */
+internal fun sanitizeJavaClassName(raw: String): String {
+    val pascal = raw.split(Regex("[^A-Za-z0-9]+"))
+        .filter { it.isNotEmpty() }
+        .joinToString("") { it.replaceFirstChar { c -> c.uppercaseChar() } }
+    return when {
+        pascal.isEmpty()          -> "Program"
+        pascal.first().isDigit()  -> "_$pascal"
+        else                      -> pascal
+    }
 }
 
 /** Watch [source] for changes and recompile on every save (ER-7). */

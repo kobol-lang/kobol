@@ -33,6 +33,19 @@ class ParserTest {
         assertEquals("MAIN", p.procedures[0].name)
     }
 
+    // #1: the PROGRAM name's original source case is preserved in rawName so codegen
+    // can honor it (`PROGRAM DataTypes` → class DataTypes), while name stays UPPERCASE.
+    @Test fun `PROGRAM name preserves original case in rawName`() {
+        val p = parse("""
+            PROGRAM DataTypes
+            PROCEDURE Main:
+              STOP RUN
+            END-PROCEDURE
+        """.trimIndent())
+        assertEquals("DATATYPES", p.name, "name is normalized UPPERCASE")
+        assertEquals("DataTypes", p.rawName, "rawName preserves source case")
+    }
+
     @Test fun `program with version and author`() {
         val p = parse("""
             PROGRAM App
@@ -1009,5 +1022,59 @@ class ParserTest {
         assertEquals("addition", tt.name)
         assertEquals(listOf("A", "B"), tt.columns)
         assertEquals(2, tt.rows.size)
+    }
+
+    // -------------------------------------------------------------------------
+    // Challenge #3 — DEFINE TYPE Name IS <type> (the IS-keyword parse branch)
+    // -------------------------------------------------------------------------
+
+    @Test fun `DEFINE TYPE alias parses (IS is a keyword)`() {
+        val p = parse("""
+            PROGRAM T
+            DEFINE TYPE Rate IS DECIMAL(18, 8)
+            PROCEDURE Main:
+              STOP RUN
+            END-PROCEDURE
+        """.trimIndent())
+        assertEquals(1, p.typeAliases.size)
+        assertEquals("RATE", p.typeAliases[0].name)
+    }
+
+    // -------------------------------------------------------------------------
+    // Challenge #2 — DIVIDE accepts both BY (English) and INTO (COBOL) directions
+    // -------------------------------------------------------------------------
+
+    @Test fun `DIVIDE BY GIVING parses with English direction`() {
+        val p = parse("""
+            PROGRAM T
+            DATA:
+              total : DECIMAL(10, 2)
+              count : DECIMAL(10, 2)
+              avg   : DECIMAL(10, 2)
+            PROCEDURE Main:
+              DIVIDE total BY count GIVING avg
+            END-PROCEDURE
+        """.trimIndent())
+        val div = p.procedures[0].body[0]
+        assertIs<DivideStatement>(div)
+        // result = into / divisor → into is the dividend (total), divisor is count
+        assertEquals(listOf("TOTAL"), div.into.parts)
+        assertEquals(listOf("COUNT"), (div.divisor as Reference).parts)
+        assertEquals(listOf("AVG"), div.giving?.parts)
+    }
+
+    @Test fun `DIVIDE INTO still parses (no regression)`() {
+        val p = parse("""
+            PROGRAM T
+            DATA:
+              total : DECIMAL(10, 2)
+              avg   : DECIMAL(10, 2)
+            PROCEDURE Main:
+              DIVIDE 4 INTO total GIVING avg
+            END-PROCEDURE
+        """.trimIndent())
+        val div = p.procedures[0].body[0]
+        assertIs<DivideStatement>(div)
+        assertEquals(listOf("TOTAL"), div.into.parts)
     }
 }

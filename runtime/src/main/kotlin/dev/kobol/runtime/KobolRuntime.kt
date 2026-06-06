@@ -80,6 +80,16 @@ object KobolRuntime {
     fun filterByMember(list: List<Any?>, name: String): List<Any?> =
         list.filter { memberValue(it, name) == true }
 
+    /** Keep elements where the named boolean field/condition is NOT true (`FILTER WHERE NOT x`). O(n). */
+    @JvmStatic
+    fun rejectByMember(list: List<Any?>, name: String): List<Any?> =
+        list.filter { memberValue(it, name) != true }
+
+    /** Project each element to its named field value (`TRANSFORM TO field`). O(n), single pass. */
+    @JvmStatic
+    fun mapField(list: List<Any?>, field: String): List<Any?> =
+        list.map { memberValue(it, field) }
+
     /** Sort by the named field's natural order. Nulls sort first; [descending] reverses. O(n log n). */
     @JvmStatic
     fun sortByField(list: List<Any?>, field: String, descending: Boolean): List<Any?> {

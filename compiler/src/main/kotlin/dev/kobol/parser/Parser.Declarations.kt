@@ -185,8 +185,8 @@ internal fun Parser.parseTypeAlias(): TypeAliasDecl {
         if (!check(IDENTIFIER) || peek().value.uppercase() != "TYPE") throw error("Expected TYPE after DEFINE")
         advance()
         val name = expectIdent("Expected type alias name")
-        if (!check(IDENTIFIER) || peek().value.uppercase() != "IS") throw error("Expected IS after type alias name")
-        advance()
+        // `IS` is a reserved keyword token, never an IDENTIFIER — match the keyword directly.
+        expect(IS, "Expected IS after type alias name")
         val target = parseTypeSpec()
         return TypeAliasDecl(name, target, p)
     }

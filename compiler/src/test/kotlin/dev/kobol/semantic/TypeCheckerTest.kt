@@ -51,6 +51,33 @@ class TypeCheckerTest {
         """.trimIndent())
     }
 
+    // #19: uninitialized temporal types have no implicit default (the spec no longer
+    // promises "current date"). Declaration-site warning W019, not a silent null NPE.
+    @Test fun `uninitialized DATE warns W019`() {
+        val tc = analyze("""
+            PROGRAM T
+            DATA:
+              started : DATE
+            PROCEDURE Main:
+              DISPLAY "x"
+            END-PROCEDURE
+        """.trimIndent())
+        assertTrue("W019" in tc.diagnostics.warnings.map { it.code }, "expected W019 for uninitialized DATE")
+        assertFalse(tc.diagnostics.hasErrors, "W019 is a warning, not an error")
+    }
+
+    @Test fun `initialized DATE does not warn W019`() {
+        val tc = analyze("""
+            PROGRAM T
+            DATA:
+              started : DATE = TODAY()
+            PROCEDURE Main:
+              DISPLAY "x"
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse("W019" in tc.diagnostics.warnings.map { it.code }, "initialized DATE must not warn")
+    }
+
     @Test fun `procedure with parameters is clean`() {
         expectClean("""
             PROGRAM T

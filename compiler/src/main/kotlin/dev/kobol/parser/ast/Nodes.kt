@@ -24,6 +24,8 @@ data class Program(
     val namedConditions: List<NamedConditionDecl> = emptyList(),
     val moduleDecl: ModuleDecl? = null,
     val tableTests: List<TableTestDecl> = emptyList(),
+    /** PROGRAM name in original source case (e.g. "DataTypes"); [name] is UPPERCASE. */
+    val rawName: String = name,
 )
 
 // =============================================================================
@@ -238,6 +240,22 @@ data class MoveStatement(
 data class ComputeStatement(
     val target: Reference,
     val expr: Expression,
+    override val pos: SourcePosition,
+) : Statement()
+
+// PUT value TO map WITH KEY key   (#12 — MAP insert/update)
+data class MapPutStatement(
+    val value: Expression,
+    val map: Reference,
+    val key: Expression,
+    override val pos: SourcePosition,
+) : Statement()
+
+// GET map KEY key INTO dest        (#12 — MAP lookup)
+data class MapGetStatement(
+    val map: Reference,
+    val key: Expression,
+    val into: Reference,
     override val pos: SourcePosition,
 ) : Statement()
 

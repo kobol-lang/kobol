@@ -165,6 +165,18 @@ class JavaTranspiler(
         when (stmt) {
             is MoveStatement     -> line("${emitRef(stmt.to)} = ${emitExprFor(refType(stmt.to), stmt.from)};")
             is ComputeStatement  -> line("${emitRef(stmt.target)} = ${emitExprFor(refType(stmt.target), stmt.expr)};")
+            is MapPutStatement   -> line("${emitRef(stmt.map)}.put(${emitExpr(stmt.key)}, ${emitExpr(stmt.value)});")
+            is MapGetStatement   -> {
+                // Cast to the boxed value type; assignment to a primitive target auto-unboxes (#12).
+                val vt = (refType(stmt.map) as? KobolType.MapType)?.valueType ?: refType(stmt.into)
+                val boxed = when (vt) {
+                    is KobolType.IntegerType  -> "Long"
+                    is KobolType.SmallIntType -> "Integer"
+                    is KobolType.BooleanType  -> "Boolean"
+                    else                      -> kobolTypeToJava(vt)
+                }
+                line("${emitRef(stmt.into)} = ($boxed) ${emitRef(stmt.map)}.get(${emitExpr(stmt.key)});")
+            }
             is LocalVarDecl      -> {
                 val kType = stmt.type?.let { checker.toKobolType(it) }
                             ?: inferLiteralType(stmt.initializer)

@@ -72,6 +72,11 @@ internal fun AsmEmitter.emitCompute(ctx: MethodContext, stmt: ComputeStatement) 
 internal fun AsmEmitter.emitLocalVarDecl(ctx: MethodContext, stmt: LocalVarDecl) {
         val kType = stmt.type?.let { checker.toKobolType(it) } ?: inferExprType(stmt.initializer)
         emitExpr(ctx, stmt.initializer)
+        if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
+            coerceToDecimalIfNeeded(ctx.mv, inferExprType(stmt.initializer))
+        } else {
+            coerceIntToTarget(ctx.mv, inferExprType(stmt.initializer), kType)
+        }
         val slot = ctx.allocLocal(stmt.name, kType)
         storeLocal(ctx.mv, kType, slot)
     }
@@ -79,13 +84,15 @@ internal fun AsmEmitter.emitLocalVarDecl(ctx: MethodContext, stmt: LocalVarDecl)
 internal fun AsmEmitter.emitMove(ctx: MethodContext, stmt: MoveStatement) {
         val mv = ctx.mv
         emitExpr(ctx, stmt.from)
-        // Coerce INTEGER literal to BigDecimal when target field is MONEY/DECIMAL
-        val fromType = inferExprType(stmt.from)
-        if (fromType is KobolType.IntegerType) {
-            val targetType = resolveRefFinalType(ctx, stmt.to)
-            if (targetType is KobolType.MoneyType || targetType is KobolType.DecimalType) {
-                coerceToDecimalIfNeeded(mv, fromType)
-            }
+        // Coerce the source value to the receiving field's representation:
+        //   INTEGER/SMALLINT → BigDecimal  when target is MONEY/DECIMAL
+        //   INTEGER (long)   → int (L2I)    when target is SMALLINT
+        val fromType   = inferExprType(stmt.from)
+        val targetType = resolveRefFinalType(ctx, stmt.to)
+        if (targetType is KobolType.MoneyType || targetType is KobolType.DecimalType) {
+            coerceToDecimalIfNeeded(mv, fromType)
+        } else {
+            coerceIntToTarget(mv, fromType, targetType)
         }
         emitStore(ctx, stmt.to)
     }
@@ -107,6 +114,36 @@ internal fun AsmEmitter.emitMove(ctx: MethodContext, stmt: MoveStatement) {
         return type
     }
 
+// PUT value TO map WITH KEY key — Map.put(key, value), discarding the returned prior value (#12).
+// Key/value are boxed by their own emitted expression type (a long must become a Long before
+// Map.put(Object,Object)). resolveSymbolType, not inferExprType, is needed for the value type
+// only at GET (a bare DATA-item Reference does not resolve through inferExprType).
+internal fun AsmEmitter.emitMapPut(ctx: MethodContext, stmt: MapPutStatement) {
+    val mv = ctx.mv
+    loadRef(ctx, stmt.map)                                   // Map
+    emitExpr(ctx, stmt.key)
+    boxValue(mv, inferExprType(stmt.key))
+    emitExpr(ctx, stmt.value)
+    boxValue(mv, inferExprType(stmt.value))
+    mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true)
+    mv.visitInsn(POP)                                        // discard prior mapping
+}
+
+// GET map KEY key INTO dest — Map.get(key) → cast/unbox to the value type → store (#12).
+internal fun AsmEmitter.emitMapGet(ctx: MethodContext, stmt: MapGetStatement) {
+    val mv = ctx.mv
+    val mapType   = resolveSymbolType(ctx, stmt.map.parts[0]) as? KobolType.MapType
+    val valueType = mapType?.valueType ?: resolveSymbolType(ctx, stmt.into.parts[0])
+    loadRef(ctx, stmt.map)
+    emitExpr(ctx, stmt.key)
+    boxValue(mv, inferExprType(stmt.key))
+    mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "get",
+        "(Ljava/lang/Object;)Ljava/lang/Object;", true)
+    castFromObject(mv, valueType, ctx.owner)                 // Object → typed value (unboxes primitives)
+    emitStore(ctx, stmt.into)
+}
+
 internal fun AsmEmitter.emitArith(ctx: MethodContext, target: Reference, op: String, operand: Expression, giving: Reference?, dividingMode: String? = null) {
         val mv  = ctx.mv
         // Resolve the actual target field type. When the target is a record field (e.g. summary.amount),
@@ -119,17 +156,36 @@ internal fun AsmEmitter.emitArith(ctx: MethodContext, target: Reference, op: Str
             } else baseType
         }
         val dest  = giving ?: target
+        // The result type is the destination's type — it decides decimal vs long arithmetic.
+        // (e.g. `MULTIPLY qty BY unit-price GIVING line-total` stores into a MONEY dest even
+        // though one operand is an INTEGER. Keying on the dest, then coercing each operand,
+        // makes both `... GIVING` directions agree with COMPUTE's working path — challenge #9.)
+        val destType = run {
+            val baseType = resolveSymbolType(ctx, dest.parts[0])
+            if (baseType is KobolType.RecordRefType && dest.parts.size > 1) {
+                val recSym = checker.symbols.resolve(baseType.name) as? dev.kobol.semantic.Symbol.RecordSymbol
+                recSym?.fields?.get(dest.parts[1]) ?: baseType
+            } else baseType
+        }
+        val operandType = inferExprType(operand)
 
         // ADD item TO list — list append (O(1) amortized for ArrayList)
         if (op == "+" && kType is KobolType.ListType) {
             loadRef(ctx, target)                   // ArrayList on stack
             emitExpr(ctx, operand)                 // item on stack
             // Box primitives: ArrayList.add(Object)
-            when (kType.elementType) {
+            when (val et = kType.elementType) {
                 is KobolType.IntegerType  -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Long",    "valueOf", "(J)Ljava/lang/Long;",    false)
                 is KobolType.SmallIntType -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false)
                 is KobolType.BooleanType  -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;", false)
-                else -> { /* reference types (String, BigDecimal, object) need no boxing */ }
+                is KobolType.RecordRefType -> {
+                    // Value semantics (#23): records are mutable buffers, so snapshot the
+                    // operand instead of aliasing it — otherwise mutating the buffer after
+                    // the ADD changes the element already in the list.
+                    val recClass = "${ctx.owner}\$${javaClass(et.name)}"
+                    mv.visitMethodInsn(INVOKEVIRTUAL, recClass, "copy", "()L$recClass;", false)
+                }
+                else -> { /* immutable reference types (String, BigDecimal) need no copy */ }
             }
             // List.add is an interface method; field type is Ljava/util/List; not ArrayList
             mv.visitMethodInsn(INVOKEINTERFACE, "java/util/List", "add", "(Ljava/lang/Object;)Z", true)
@@ -137,9 +193,11 @@ internal fun AsmEmitter.emitArith(ctx: MethodContext, target: Reference, op: Str
             return              // no emitStore — list mutated in place
         }
 
-        if (kType is KobolType.MoneyType || kType is KobolType.DecimalType) {
+        if (destType is KobolType.MoneyType || destType is KobolType.DecimalType) {
             loadRef(ctx, target)
+            coerceToDecimalIfNeeded(mv, kType)        // target may be INTEGER (e.g. int * decimal GIVING money)
             emitExpr(ctx, operand)
+            coerceToDecimalIfNeeded(mv, operandType)  // operand may be INTEGER — #9 long → BigDecimal
             val methodName = when (op) { "+" -> "add"; "-" -> "subtract"; "*" -> "multiply"; else -> "divide" }
             if (op == "/") {
                 val roundingMode = dividingMode ?: "HALF_EVEN"
@@ -323,7 +381,15 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
                 return
             }
 
-            doStaticCall(alias.lowercase())
+            // Auto-imported java.lang.* (e.g. CALL System.currentTimeMillis) — checked
+            // after locals so a user variable of the same name still wins.
+            val javaLang = JAVA_LANG_OWNERS[alias]
+            if (javaLang != null) { doStaticCall(javaLang); return }
+
+            // Unresolved owner: emit with the ORIGINAL case so the resulting
+            // NoClassDefFoundError names the real class, not a misleading lowercase
+            // (`system`). Surfaces the true "missing import" cause.
+            doStaticCall(ownerParts[0])
         } else {
             // Check if the first part is an import alias (e.g. DateFmt.ISO_LOCAL_DATE.format)
             val alias     = ownerParts[0].uppercase()

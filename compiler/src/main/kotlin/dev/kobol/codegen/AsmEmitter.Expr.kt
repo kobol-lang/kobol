@@ -109,9 +109,12 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
             is UnaryExpr -> {
                 emitExpr(ctx, expr.operand)
                 when (expr.op) {
-                    UnaryOp.NEGATE -> {
-                        val t = inferExprType(expr.operand)
-                        if (t is KobolType.IntegerType) mv.visitInsn(LNEG) else mv.visitInsn(INEG)
+                    UnaryOp.NEGATE -> when (inferExprType(expr.operand)) {
+                        // BigDecimal: -x is BigDecimal.negate(), never the integer `ineg`.
+                        is KobolType.MoneyType, is KobolType.DecimalType ->
+                            mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "negate", "()L$BIGDECIMAL;", false)
+                        is KobolType.IntegerType -> mv.visitInsn(LNEG)   // long
+                        else                     -> mv.visitInsn(INEG)   // SMALLINT (int)
                     }
                     UnaryOp.NOT -> {
                         // boolean: 1 → 0, 0 → 1  via XOR with 1
@@ -125,11 +128,22 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
             is BuiltinCall -> emitBuiltin(ctx, expr)
 
             is RecordLiteralExpr -> {
-                // Allocate new record instance — field init done separately at statement level
+                // Allocate the record, then initialise each named field (#15). Previously only the
+                // NEW happened and field values were dropped, so `Point { x: 4 }` produced x = 0.
                 val className = "${ctx.owner}\$${javaClass(expr.typeName)}"
                 mv.visitTypeInsn(NEW, className)
                 mv.visitInsn(DUP)
                 mv.visitMethodInsn(INVOKESPECIAL, className, "<init>", "()V", false)
+                val recSym = checker.symbols.resolve(expr.typeName) as? Symbol.RecordSymbol
+                for (f in expr.fields) {
+                    val fType = recSym?.fields?.get(f.name) ?: inferExprType(f.value)
+                    mv.visitInsn(DUP)                  // keep the instance ref below the value
+                    emitExpr(ctx, f.value)
+                    val vType = inferExprType(f.value)
+                    if (fType is KobolType.MoneyType || fType is KobolType.DecimalType) coerceToDecimalIfNeeded(mv, vType)
+                    else coerceIntToTarget(mv, vType, fType)
+                    mv.visitFieldInsn(PUTFIELD, className, javaIdent(f.name), jvmDescriptor(fType))
+                }
             }
 
             is NamedArgument -> emitExpr(ctx, expr.value)
@@ -195,6 +209,30 @@ internal fun AsmEmitter.coerceToDecimalIfNeeded(mv: MethodVisitor, type: KobolTy
     }
 }
 
+/**
+ * Narrow a Kobol INTEGER (JVM `long`) on top of stack to a SMALLINT (JVM `int`) slot
+ * when the receiving target is SMALLINT. The SMALLINT field/slot descriptor is `I`, so an
+ * INTEGER-typed source value (e.g. a literal, which is always pushed as `long`) needs L2I
+ * before it reaches the slot — otherwise the verifier rejects a `long` in an `int` slot.
+ */
+internal fun AsmEmitter.coerceIntToTarget(mv: MethodVisitor, sourceType: KobolType, targetType: KobolType) {
+    if (targetType is KobolType.SmallIntType && sourceType is KobolType.IntegerType) {
+        mv.visitInsn(L2I)
+    }
+}
+
+/** Emit an argument for a builtin whose parameter is BigDecimal, widening INTEGER/SMALLINT args. */
+internal fun AsmEmitter.emitDecimalArg(ctx: MethodContext, arg: Expression) {
+    emitExpr(ctx, arg)
+    coerceToDecimalIfNeeded(ctx.mv, inferExprType(arg))
+}
+
+/** True when the type is a JVM reference (occupies one slot, compared with `.equals`, not LCMP). */
+internal fun isJvmReference(type: KobolType): Boolean = when (type) {
+    is KobolType.IntegerType, is KobolType.SmallIntType, is KobolType.BooleanType, is KobolType.VoidType -> false
+    else -> true
+}
+
 internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
         val mv    = ctx.mv
         val lType = inferExprType(expr.left)
@@ -220,25 +258,46 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
                 BinaryOp.LT  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFLT) }
                 BinaryOp.GEQ -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFGE) }
                 BinaryOp.LEQ -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFLE) }
+                BinaryOp.POWER -> {
+                    // Decimal base ** exponent. BigDecimal supports only integer exponents,
+                    // so the exponent (also a BigDecimal here) is narrowed with
+                    // intValueExact() — which THROWS on a fractional or oversized exponent
+                    // rather than silently flooring or floating it (#10, priority: never
+                    // lose decimal exactness). Previously this fell to `else` and emitted
+                    // nothing → the result was silently the wrong operand.
+                    mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "intValueExact", "()I", false)
+                    mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "power", "(L$BIGDECIMAL;I)L$BIGDECIMAL;", false)
+                }
                 else -> { /* default */ }
             }
             return
         }
 
         if (expr.op == BinaryOp.AND || expr.op == BinaryOp.OR) {
-            val lEnd = Label()
+            // Short-circuit AND/OR producing a 0/1 int. Both operands and both
+            // exit paths must leave exactly one int on the stack, else the JVM
+            // verifier (and ASM COMPUTE_FRAMES) sees mismatched frames at the
+            // merge label — the bug behind the #6 `ArrayIndexOutOfBoundsException`.
+            val lShort = Label()   // the short-circuit result is known here
+            val lEnd   = Label()
             emitExpr(ctx, expr.left)
-            if (expr.op == BinaryOp.AND) mv.visitJumpInsn(IFEQ, lEnd)
-            else mv.visitJumpInsn(IFNE, lEnd)
+            // AND: left==0 → result 0 (short).  OR: left!=0 → result 1 (short).
+            if (expr.op == BinaryOp.AND) mv.visitJumpInsn(IFEQ, lShort)
+            else mv.visitJumpInsn(IFNE, lShort)
             emitExpr(ctx, expr.right)
+            // result == right (already a 0/1 int); skip the short-circuit constant
+            mv.visitJumpInsn(GOTO, lEnd)
+            mv.visitLabel(lShort)
+            mv.visitInsn(if (expr.op == BinaryOp.AND) ICONST_0 else ICONST_1)
             mv.visitLabel(lEnd)
             return
         }
 
-        // String (in)equality: use String.equals, not the long-compare path below
-        // (which would emit LCMP on object references — invalid bytecode).
+        // Reference-type (in)equality: use Object.equals, not the long-compare path below
+        // (which would emit LCMP on object references — invalid bytecode → frame crash).
+        // Covers String, UUID, dates, records, lists, etc. (numeric Money/Decimal handled above).
         if ((expr.op == BinaryOp.EQ || expr.op == BinaryOp.NEQ) &&
-            (lType is KobolType.TextType || rType is KobolType.TextType)) {
+            (isJvmReference(lType) || isJvmReference(rType))) {
             emitExpr(ctx, expr.left)
             emitExpr(ctx, expr.right)
             mv.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Object", "equals",
@@ -258,10 +317,11 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
             BinaryOp.MULTIPLY -> mv.visitInsn(LMUL)
             BinaryOp.DIVIDE   -> mv.visitInsn(LDIV)
             BinaryOp.POWER    -> {
-                // Cast to double, call Math.pow, cast back
-                mv.visitInsn(L2D); mv.visitInsn(L2D)
-                mv.visitMethodInsn(INVOKESTATIC, "java/lang/Math", "pow", "(DD)D", false)
-                mv.visitInsn(D2L)
+                // Integer exponentiation. Both operands are longs on the stack; the old
+                // `L2D; L2D` dance was invalid (the second L2D hit the already-converted
+                // double, not the second-from-top long → VerifyError). Reuse the same
+                // long power helper the builtin POWER uses (#10).
+                mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "power", "(JJ)J", false)
             }
             BinaryOp.EQ  -> { mv.visitInsn(LCMP); emitCompareFlag(mv, IFEQ) }
             BinaryOp.NEQ -> { mv.visitInsn(LCMP); emitCompareFlag(mv, IFNE) }
@@ -310,6 +370,44 @@ internal fun AsmEmitter.emitUserProcCallExpr(ctx: MethodContext, name: String,
         mv.visitLabel(labelAfter)
     }
 
+/**
+ * Emit construction of a VARIANT case: `Shipped("X")` (positional) or
+ * `Shipped(tracking: "X")` (named) — #18. NEWs the concrete case class and invokes its
+ * field constructor. Named arguments are reordered to the declared field order; positional
+ * arguments are taken in order. Argument arity / names are validated by the TypeChecker.
+ */
+internal fun AsmEmitter.emitVariantConstruction(
+    ctx: MethodContext, variantName: String, case: VariantCase, args: List<Expression>
+) {
+    val mv        = ctx.mv
+    val caseClass = "${ctx.owner}\$${javaClass(variantName)}Case${javaClass(case.name)}"
+
+    // Resolve each declared field to its argument expression, honouring named args.
+    val named = args.any { it is NamedArgument }
+    val ordered: List<Expression> = if (named) {
+        case.fields.map { f ->
+            val match = args.firstOrNull { it is NamedArgument && it.paramName.equals(f.name, ignoreCase = true) }
+                ?: error("variant ${case.name}: no argument for field '${f.name}'")
+            (match as NamedArgument).value
+        }
+    } else {
+        args.map { if (it is NamedArgument) it.value else it }
+    }
+
+    mv.visitTypeInsn(NEW, caseClass)
+    mv.visitInsn(DUP)
+    for ((i, f) in case.fields.withIndex()) {
+        val fType = checker.toKobolType(f.type)
+        val arg   = ordered[i]
+        emitExpr(ctx, arg)
+        val aType = inferExprType(arg)
+        if (fType is KobolType.MoneyType || fType is KobolType.DecimalType) coerceToDecimalIfNeeded(mv, aType)
+        else coerceIntToTarget(mv, aType, fType)
+    }
+    val paramDesc = case.fields.joinToString("") { jvmDescriptor(checker.toKobolType(it.type)) }
+    mv.visitMethodInsn(INVOKESPECIAL, caseClass, "<init>", "($paramDesc)V", false)
+}
+
 internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
         val mv   = ctx.mv
         val args = expr.args
@@ -321,6 +419,15 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
             ?: checker.symbols.resolve(name) as? Symbol.ProcedureSymbol
         if (procSym != null && procSym.returnType != null) {
             emitUserProcCallExpr(ctx, expr.name, args, procSym)
+            return
+        }
+
+        // Variant case construction: Shipped("X") / Shipped(tracking: "X") — #18.
+        // Without this, a case name fell through to "unknown builtin" and the args were
+        // left dangling, so MOVE stored a non-case value and every MATCH arm missed.
+        val caseEntry = variantCaseIndex[name]
+        if (caseEntry != null) {
+            emitVariantConstruction(ctx, caseEntry.first, caseEntry.second, args)
             return
         }
 
@@ -392,21 +499,23 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
                         else                            mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "abs", "($BD)$BD", false)
                     }
                     "ROUND"    -> {
+                        // arg0 is BigDecimal (widen INTEGER args — #11); arg1 is the scale (long), arg2 the mode (string).
+                        emitDecimalArg(ctx, args[0])
                         if (args.size == 3) {
-                            args.forEach { emitExpr(ctx, it) }
+                            emitExpr(ctx, args[1]); emitExpr(ctx, args[2])
                             mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "roundWithMode", "(${BD}J$S)$BD", false)
                         } else {
-                            args.forEach { emitExpr(ctx, it) }
+                            emitExpr(ctx, args[1])
                             mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "round", "(${BD}J)$BD", false)
                         }
                     }
-                    "ROUND-WITH-MODE" -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "roundWithMode", "(${BD}J$S)$BD", false) }
-                    "SCALE-OF"        -> { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "scaleOf",      "($BD)J", false) }
-                    "PRECISION-OF"    -> { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "precisionOf",  "($BD)J", false) }
-                    "TRUNCATE" -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "truncate", "(${BD}J)$BD", false) }
-                    "FLOOR"    -> { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "floor", "($BD)$BD", false) }
-                    "CEIL"     -> { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "ceil",  "($BD)$BD", false) }
-                    "SQRT"     -> { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sqrt",  "($BD)$BD", false) }
+                    "ROUND-WITH-MODE" -> { emitDecimalArg(ctx, args[0]); emitExpr(ctx, args[1]); emitExpr(ctx, args[2]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "roundWithMode", "(${BD}J$S)$BD", false) }
+                    "SCALE-OF"        -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "scaleOf",      "($BD)J", false) }
+                    "PRECISION-OF"    -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "precisionOf",  "($BD)J", false) }
+                    "TRUNCATE" -> { emitDecimalArg(ctx, args[0]); emitExpr(ctx, args[1]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "truncate", "(${BD}J)$BD", false) }
+                    "FLOOR"    -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "floor", "($BD)$BD", false) }
+                    "CEIL"     -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "ceil",  "($BD)$BD", false) }
+                    "SQRT"     -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sqrt",  "($BD)$BD", false) }
                     "SIGN" -> {
                         val t = inferExprType(args[0])
                         emitExpr(ctx, args[0])
@@ -520,15 +629,18 @@ internal fun AsmEmitter.emitPipeline(ctx: MethodContext, expr: PipelineExpr) {
         for (stage in listStages) {
             when (stage) {
                 is PipelineStage.FilterStage -> {
-                    // Supported form: FILTER WHERE <field-or-condition>. The predicate is a
-                    // bare reference to a boolean field or CONDITION on the element.
-                    val member = (stage.condition as? Reference)?.takeIf { !it.isFieldAccess }?.name
+                    // Supported forms: FILTER WHERE <member>  and  FILTER WHERE NOT <member>,
+                    // where <member> is a bare reference to a boolean field/CONDITION on the element.
+                    val cond    = stage.condition
+                    val negated = cond is UnaryExpr && cond.op == UnaryOp.NOT
+                    val ref     = (if (negated) (cond as UnaryExpr).operand else cond) as? Reference
+                    val member  = ref?.takeIf { !it.isFieldAccess }?.name
                     if (member != null) {
                         mv.visitLdcInsn(member)
-                        mv.visitMethodInsn(INVOKESTATIC, RT, "filterByMember",
+                        mv.visitMethodInsn(INVOKESTATIC, RT, if (negated) "rejectByMember" else "filterByMember",
                             "(Ljava/util/List;Ljava/lang/String;)Ljava/util/List;", false)
                     }
-                    // Complex predicates are not yet supported → pass through unfiltered.
+                    // Compound predicates are not yet supported → pass through unfiltered.
                 }
                 is PipelineStage.SortStage -> {
                     mv.visitLdcInsn(stage.field)
@@ -541,15 +653,27 @@ internal fun AsmEmitter.emitPipeline(ctx: MethodContext, expr: PipelineExpr) {
                     mv.visitMethodInsn(INVOKESTATIC, RT, "take",
                         "(Ljava/util/List;J)Ljava/util/List;", false)
                 }
-                else -> { /* TransformStage: advanced — skip for now */ }
+                is PipelineStage.TransformStage -> {
+                    // TRANSFORM TO field — project each element to that field's value. O(n) single pass.
+                    mv.visitLdcInsn(stage.field)
+                    mv.visitMethodInsn(INVOKESTATIC, RT, "mapField",
+                        "(Ljava/util/List;Ljava/lang/String;)Ljava/util/List;", false)
+                }
+                else -> { /* SumStage handled below; no other list-stage kinds */ }
             }
         }
 
         if (hasSumStage) {
-            // Determine element type from source expression to pick the right sum method
-            val elemType = (inferExprType(expr.source) as? KobolType.ListType)?.elementType
+            // The element type the SUM reduces over is the TRANSFORMed field's type (if any),
+            // not the source element type — e.g. `sales TRANSFORM TO amount SUM` sums MONEY, not Sale.
+            val srcElem = (inferExprType(expr.source) as? KobolType.ListType)?.elementType
                 ?: KobolType.UnknownType
-            when (elemType) {
+            val transformField = listStages.filterIsInstance<PipelineStage.TransformStage>().lastOrNull()?.field
+            val effectiveElem = if (transformField != null && srcElem is KobolType.RecordRefType) {
+                val recSym = checker.symbols.resolve(srcElem.name) as? dev.kobol.semantic.Symbol.RecordSymbol
+                recSym?.fields?.get(transformField) ?: KobolType.UnknownType
+            } else if (transformField != null) srcElem else srcElem
+            when (effectiveElem) {
                 is KobolType.IntegerType ->
                     mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sumLong",
                         "(Ljava/util/List;)J", false)
