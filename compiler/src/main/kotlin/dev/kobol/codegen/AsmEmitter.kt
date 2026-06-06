@@ -76,6 +76,17 @@ class AsmEmitter(
     internal val pendingEndpointMethods = mutableMapOf<String, MutableList<Any>>() // placeholder — unused, see pendingEndpoints
 
     /**
+     * Classpath-aware interop symbol resolver (challenge enabler **E2**). Lazily reads
+     * imported classes' real signatures so an interop `CALL` links to the true JVM
+     * descriptor instead of a Kobol-side guess. Lazy so programs that never make an
+     * interop call pay nothing (P5); built from the same classpath the compiled program
+     * will run against.
+     */
+    internal val classpathResolver: dev.kobol.semantic.ClasspathSymbolResolver by lazy {
+        dev.kobol.semantic.ClasspathSymbolResolver(dev.kobol.KobolHome.runtimeClasspath())
+    }
+
+    /**
      * Compile the program to bytecode.
      * Returns a map from class binary name (slash-separated) → bytecode bytes.
      * The outer class appears first; inner classes follow.
@@ -522,16 +533,21 @@ class AsmEmitter(
             }
             mv.visitMethodInsn(INVOKESTATIC, owner, bodyName, "($paramDescs)$bodyRetDesc", false)
 
-            // Complete the future
-            mv.visitVarInsn(ALOAD, cfSlot)
+            // Complete the future. The body result is already on the stack; box it FIRST,
+            // THEN load the CompletableFuture and SWAP so the receiver sits under the arg.
+            // (Loading the CF before boxing made boxValue operate on the CF, not the result
+            // → VerifyError once executed — see F19.) Boxed value is always category-1, so
+            // SWAP with the (category-1) CF reference is valid.
             if (proc.returnType != null) {
-                // box if primitive
                 val retKType = checker.toKobolType(proc.returnType)
-                boxValue(mv, retKType)
+                boxValue(mv, retKType)            // result -> boxed (category-1 ref)
+                mv.visitVarInsn(ALOAD, cfSlot)    // ..., boxed, CF
+                mv.visitInsn(SWAP)                // ..., CF, boxed
                 mv.visitMethodInsn(INVOKEVIRTUAL, COMPLETABLE_FUTURE, "complete",
                     "(Ljava/lang/Object;)Z", false)
                 mv.visitInsn(POP)
             } else {
+                mv.visitVarInsn(ALOAD, cfSlot)
                 mv.visitInsn(ACONST_NULL)
                 mv.visitMethodInsn(INVOKEVIRTUAL, COMPLETABLE_FUTURE, "complete",
                     "(Ljava/lang/Object;)Z", false)

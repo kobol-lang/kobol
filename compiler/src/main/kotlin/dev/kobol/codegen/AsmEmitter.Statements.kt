@@ -283,6 +283,18 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
             val targetClass = mod.jvmClassName
             val methodName  = javaIdent(stmt.procedureName)
             val paramDescs  = proc.params.joinToString("") { jvmDescriptor(it.type) }
+            // An exported ASYNC proc's JVM entry returns CompletableFuture (see emitAsyncProcedure),
+            // NOT its declared inner type — mirror the local async PERFORM path. The declared
+            // returnType descriptor would link to a method that does not exist (F9 landmine).
+            if (proc.isAsync) {
+                stmt.args.forEach { emitExpr(ctx, it) }
+                mv.visitMethodInsn(INVOKESTATIC, targetClass, methodName,
+                    "($paramDescs)L$COMPLETABLE_FUTURE;", false)
+                // Mirror the local ASYNC path: store the future into GIVING (F10 — consumed by
+                // AWAIT) or discard it for fire-and-forget. No cross-module asymmetry.
+                if (stmt.giving != null) emitStore(ctx, stmt.giving) else mv.visitInsn(POP)
+                return
+            }
             val retDesc     = proc.returnType?.let { jvmDescriptor(it) } ?: "V"
             stmt.args.forEach { emitExpr(ctx, it) }
             mv.visitMethodInsn(INVOKESTATIC, targetClass, methodName, "($paramDescs)$retDesc", false)
@@ -378,12 +390,39 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
 
         // Helper: emit static call after args are ready
         fun doStaticCall(owner: String) {
-            stmt.args.forEach { emitExpr(ctx, it) }
             val argDesc = stmt.args.joinToString("") { jvmDescriptor(inferExprType(it)) }
-            val retDesc = if (stmt.giving != null) jvmDescriptor(resolveSymbolType(ctx, stmt.giving.parts[0])) else "Ljava/lang/Object;"
+            // E2 (increment-1): for a fire-and-forget interop CALL (no GIVING) the return
+            // descriptor was guessed Ljava/lang/Object; — wrong for any method with a
+            // concrete (or void) return, so the emitted INVOKESTATIC named a non-existent
+            // method → NoSuchMethodError at run, clean type-check = P3 landmine. Read the
+            // real method off the classpath and use its TRUE return descriptor, but only
+            // when its parameter types already match what we emit (no coercion needed —
+            // overload coercion is F13). Class unreadable / ambiguous / arg-mismatch →
+            // fall back to today's guess (no regression). The GIVING path is left as-is:
+            // it links to the declared target type, which real-return propagation (F14)
+            // will refine in a later increment.
+            val realRet: Type? = if (stmt.giving == null) {
+                (classpathResolver.resolveCall(owner, methodName, stmt.args.size)
+                    as? dev.kobol.semantic.ClasspathSymbolResolver.CallResolution.Resolved)
+                    ?.sig
+                    ?.takeIf { sig ->
+                        Type.getArgumentTypes(sig.descriptor).joinToString("") { it.descriptor } == argDesc
+                    }
+                    ?.let { Type.getReturnType(it.descriptor) }
+            } else null
+
+            stmt.args.forEach { emitExpr(ctx, it) }
+            val retDesc = when {
+                stmt.giving != null -> jvmDescriptor(resolveSymbolType(ctx, stmt.giving.parts[0]))
+                realRet != null     -> realRet.descriptor
+                else                -> "Ljava/lang/Object;"
+            }
             mv.visitMethodInsn(INVOKESTATIC, owner, methodName, "($argDesc)$retDesc", false)
             if (stmt.giving != null) emitStore(ctx, stmt.giving)
-            else if (retDesc != "V") mv.visitInsn(POP)
+            else if (retDesc != "V") {
+                // Size-aware discard: a real long/double return is category-2 (POP2).
+                if (Type.getType(retDesc).size == 2) mv.visitInsn(POP2) else mv.visitInsn(POP)
+            }
         }
 
         if (ownerParts.size == 1) {

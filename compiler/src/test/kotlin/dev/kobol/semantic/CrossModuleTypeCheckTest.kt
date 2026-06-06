@@ -230,16 +230,38 @@ class CrossModuleTypeCheckTest {
             "Sync cross-module GIVING must error E215, not be silently dropped; got $codes")
     }
 
-    @Test fun `cross-module PERFORM GIVING on async procedure raises E218 (capture unsupported)`() {
-        val asyncLibSrc = """
-            PROGRAM JobUtils
-            MODULE kobol.jobs:
-              EXPORT PROCEDURE Fetch
-            END-MODULE
-            EXPORT ASYNC PROCEDURE Fetch USING n : INTEGER RETURNING INTEGER:
-              RETURN n * 2
+    // F10: cross-module async result capture is now supported (E218 retired). A GIVING
+    // target of FUTURE OF <ReturnType> is clean; a non-future target still errors E216.
+    private val asyncLibSrc = """
+        PROGRAM JobUtils
+        MODULE kobol.jobs:
+          EXPORT PROCEDURE Fetch
+        END-MODULE
+        EXPORT ASYNC PROCEDURE Fetch USING n : INTEGER RETURNING INTEGER:
+          RETURN n * 2
+        END-PROCEDURE
+    """.trimIndent()
+
+    @Test fun `cross-module async PERFORM GIVING a FUTURE target is clean (F10)`() {
+        val registry = buildRegistry(asyncLibSrc)
+        val consumerSrc = """
+            PROGRAM Consumer
+            IMPORT kobol.jobs AS Jobs
+            DATA:
+              x : INTEGER = 5
+              fut : FUTURE OF INTEGER
+            PROCEDURE Main:
+              PERFORM Jobs.Fetch USING x GIVING fut
+              STOP RUN
             END-PROCEDURE
         """.trimIndent()
+        val tc = analyzeConsumer(consumerSrc, registry)
+        assertFalse(tc.diagnostics.hasErrors,
+            "Cross-module async GIVING into a FUTURE must be clean (F10); got ${tc.diagnostics.errors.map { it.message }}")
+        assertTrue("E218" !in tc.diagnostics.errors.map { it.code }, "E218 is retired (F10)")
+    }
+
+    @Test fun `cross-module async PERFORM GIVING a non-future target raises E216`() {
         val registry = buildRegistry(asyncLibSrc)
         val consumerSrc = """
             PROGRAM Consumer
@@ -254,8 +276,7 @@ class CrossModuleTypeCheckTest {
         """.trimIndent()
         val tc = analyzeConsumer(consumerSrc, registry)
         val codes = tc.diagnostics.errors.map { it.code }
-        assertTrue("E218" in codes,
-            "Async cross-module GIVING capture must error E218, not be silently dropped; got $codes")
+        assertTrue("E216" in codes, "Non-future GIVING target must error E216; got $codes")
     }
 
     // F5: version-mismatch was renumbered E215 → E219 so E215 is unambiguously sync-GIVING misuse.

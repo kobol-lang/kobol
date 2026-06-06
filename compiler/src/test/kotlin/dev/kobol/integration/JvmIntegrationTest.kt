@@ -1166,4 +1166,48 @@ class JvmIntegrationTest {
             assertTrue(!ok, "expected '$stmt' to be rejected (unimplemented), but it compiled")
         }
     }
+
+    // F19: a local ASYNC RETURNING procedure, awaited, must yield its computed value.
+    // The async runnable wrapper boxed the CompletableFuture (loaded BEFORE the result)
+    // instead of the result → VerifyError at class load. Never executed before E1, so the
+    // bug sat latent. Awaiting the future proves the wrapper completes the CF with the value.
+    @Test fun `local async RETURNING procedure awaited yields its value (F19)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            ASYNC PROCEDURE Doubler USING n : INTEGER RETURNING INTEGER:
+              RETURN n * 2
+            END-PROCEDURE
+            DATA:
+              f : FUTURE OF INTEGER
+              result : INTEGER = 0
+            PROCEDURE Main:
+              PERFORM Doubler USING 21 GIVING f
+              AWAIT f INTO result
+              DISPLAY "result={result}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("result=42" in out, "awaited async result must be 42; got: $out")
+        assertTrue("---done---" in out, "program must complete; got: $out")
+    }
+
+    // ─── E2 (increment-1): classpath-aware CALL descriptor resolution ────────────
+
+    @Test fun `fire-and-forget interop CALL links to the real return descriptor (E2)`() {
+        // CALL System.lineSeparator with no GIVING: emitCall used to guess the return
+        // descriptor as Ljava/lang/Object; (the no-GIVING default) → emits
+        // System.lineSeparator()Ljava/lang/Object; which does NOT exist → NoSuchMethodError
+        // at run, type-checks clean (P3 landmine). The real method is ()Ljava/lang/String;.
+        // E2 reads java.lang.System off the classpath, finds the unique no-arg lineSeparator,
+        // and emits its real descriptor so the call links and the program completes.
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE Main:
+              CALL System.lineSeparator
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("---done---" in out,
+            "interop CALL must link to the real descriptor and run to completion; got: $out")
+    }
 }

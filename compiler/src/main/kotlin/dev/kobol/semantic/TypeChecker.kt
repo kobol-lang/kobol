@@ -824,14 +824,20 @@ class TypeChecker(
                     error("E214", "Argument ${i+1} to '${stmt.moduleAlias}.${stmt.procedureName}': expected ${proc.params[i].type}, got $argType", stmt.pos)
                 }
             }
-            // GIVING on a cross-module call — mirror the local rules below, never drop silently.
+            // GIVING on a cross-module call — same rules as the local path below (F10).
+            // Cross-module async capture is now supported: the call links to the exported
+            // proc's CompletableFuture entry, stores it into the FUTURE OF T target, and is
+            // consumed by AWAIT — no asymmetry vs a local ASYNC PERFORM. (E218 retired.)
             if (stmt.giving != null) {
-                resolveRefType(stmt.giving)  // surface an undefined target the same as the local path
                 val qualified = "${stmt.moduleAlias}.${stmt.procedureName}"
                 if (!proc.isAsync) {
                     error("E215", "GIVING is only valid for ASYNC PROCEDURE calls; '$qualified' is not async", stmt.pos)
                 } else {
-                    error("E218", "Capturing an ASYNC result across modules is not yet supported; call '$qualified' synchronously via COMPUTE (e.g. COMPUTE x = $qualified(args)), or AWAIT a locally-declared FUTURE", stmt.pos)
+                    val futureType = proc.returnType?.let { KobolType.FutureType(it) }
+                    val givingType = resolveRefType(stmt.giving)
+                    if (futureType != null && givingType !is KobolType.FutureType && givingType != KobolType.UnknownType) {
+                        error("E216", "GIVING target must be FUTURE OF ${proc.returnType}, got $givingType", stmt.pos)
+                    }
                 }
             }
             return
