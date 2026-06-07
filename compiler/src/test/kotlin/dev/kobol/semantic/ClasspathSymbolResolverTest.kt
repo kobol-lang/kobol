@@ -171,6 +171,18 @@ class ClasspathSymbolResolverTest {
         assertTrue(r is CallResolution.Resolved, "a real upcast arg must resolve, got $r")
     }
 
+    // ─── F30 — constructors are `<init>` methods; resolveByArgs ranks them like any call ──
+
+    @Test fun `resolveByArgs resolves a constructor by its int param, narrowing the INTEGER arg (F30)`() {
+        // StringBuilder has ctors ()/(int)/(String)/(CharSequence). A Kobol INTEGER arg is a long (J):
+        // (String)/(CharSequence) are not coercible from J; only (int) is viable via F22's guarded
+        // J→I narrowing. The old NEW path guessed `<init>(J)V` → NoSuchMethodError. resolveByArgs must
+        // pick the real (I)V ctor so NEW emits the right descriptor.
+        val r = resolver.resolveByArgs("java/lang/StringBuilder", "<init>", listOf("J"))
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertEquals("(I)V", r.sig.descriptor)
+    }
+
     @Test fun `resolveByArgs prefers the long overload over narrowing when both exist`() {
         // Math.abs has abs(int)/abs(long)/abs(float)/abs(double). A long arg matches abs(long)
         // exactly (cost 0) and must NOT narrow to abs(int) — narrowing is the last resort.

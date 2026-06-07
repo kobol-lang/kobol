@@ -448,6 +448,10 @@ internal fun AsmEmitter.emitInteropInvoke(
     loadReceiver: (() -> Unit)?,
     wantDesc: String?,
     fallbackReturnWhenNoWant: String = "Ljava/lang/Object;",
+    // F30: a constructor call's "receiver" is an uninitialised NEW ref (NEW+DUP). A CHECKCAST on an
+    // uninitialised object is a VerifyError, so the NEW path passes castReceiver=false. Every other
+    // (instance) call keeps the default — the F26 receiver narrowing.
+    castReceiver: Boolean = true,
 ): String {
     val mv = ctx.mv
     val argDescs   = args.map { jvmDescriptor(inferExprType(it)) }
@@ -466,7 +470,7 @@ internal fun AsmEmitter.emitInteropInvoke(
         }
         if (coerceOk) {
             loadReceiver?.invoke()
-            checkcastReceiver(mv, loadReceiver, owner)
+            if (castReceiver) checkcastReceiver(mv, loadReceiver, owner)
             val varargsFixed = resolution.varargsFixed
             if (varargsFixed == null) {
                 args.forEachIndexed { i, arg ->
@@ -504,7 +508,7 @@ internal fun AsmEmitter.emitInteropInvoke(
 
     // Fallback: unresolved / ambiguous / unreadable / un-coercible return → Kobol-side guess.
     loadReceiver?.invoke()
-    checkcastReceiver(mv, loadReceiver, owner)
+    if (castReceiver) checkcastReceiver(mv, loadReceiver, owner)
     val argDesc = argDescs.joinToString("")
     args.forEach { emitExpr(ctx, it) }
     val retDesc = wantDesc ?: fallbackReturnWhenNoWant

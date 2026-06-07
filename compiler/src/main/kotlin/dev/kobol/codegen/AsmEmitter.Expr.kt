@@ -147,15 +147,28 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
             }
 
             is NewExpr -> {
-                // F12: NEW Owner WITH args → JVM allocation + constructor. Owner resolved via the
-                // shared CALL owner maps; arg descriptors inferred Kobol-side (no classpath read —
-                // overload disambiguation waits on E2/F13). Leaves the new instance on the stack.
+                // F30: resolve the constructor off the compile classpath (like a CALL) so the REAL
+                // <init> parameter descriptors drive the INVOKESPECIAL — incl. F22's guarded J→I
+                // narrowing — instead of the Kobol-side guess. A Kobol INTEGER is a long (J), so the
+                // old guess emitted `<init>(…J)` while a real `int`-param ctor is `(…I)` →
+                // NoSuchMethodError at run, type-checks clean = P3 landmine (the SAME guess-vs-real
+                // descriptor class E2/F13/F22 closed for CALL; the NEW path now shares
+                // emitInteropInvoke — no fork, P1; one general rule for every interop link, P6).
+                // Constructors are `<init>` methods, read off the classpath like any other.
+                //
+                // NEW+DUP is the "receiver": it leaves an UNINITIALISED ref that INVOKESPECIAL
+                // `<init>` consumes (the dup) together with the args, leaving the constructed
+                // instance on the stack. castReceiver=false — a CHECKCAST on an uninitialised NEW
+                // ref is a VerifyError. An unreadable/ambiguous owner falls back to the `(<guess>)V`
+                // descriptor (today's behaviour) — no regression (P7).
                 val owner = resolveConstructorOwner(expr.owner.split("."))
-                mv.visitTypeInsn(NEW, owner)
-                mv.visitInsn(DUP)
-                expr.args.forEach { emitExpr(ctx, it) }
-                val argDesc = expr.args.joinToString("") { jvmDescriptor(inferExprType(it)) }
-                mv.visitMethodInsn(INVOKESPECIAL, owner, "<init>", "($argDesc)V", false)
+                emitInteropInvoke(
+                    ctx, expr.args, "<init>", owner, INVOKESPECIAL, isInterface = false,
+                    loadReceiver = { mv.visitTypeInsn(NEW, owner); mv.visitInsn(DUP) },
+                    wantDesc = null,
+                    fallbackReturnWhenNoWant = "V",
+                    castReceiver = false,
+                )
             }
 
             is CallExpr -> emitCallExpr(ctx, expr)

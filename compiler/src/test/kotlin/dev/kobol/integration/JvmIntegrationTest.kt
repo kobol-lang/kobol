@@ -866,6 +866,30 @@ class JvmIntegrationTest {
         assertTrue("empty: []" in out, "no-arg NEW should construct an empty StringBuilder, got:\n$out")
     }
 
+    // F30 — NEW resolves its constructor off the classpath (like a CALL), so a real int-param ctor
+    // links even though a Kobol INTEGER is a long. StringBuilder(int capacity) is (I)V; the old
+    // guess built `<init>(J)V` (INTEGER→long) → NoSuchMethodError 'java.lang.StringBuilder.<init>(long)'
+    // at run, type-checks clean = P3 landmine. resolveByArgs picks (I)V and narrows the arg via
+    // F22's guarded Math.toIntExact.
+    @Test fun `NEW resolves an int-param constructor and narrows the INTEGER arg (F30)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              result : TEXT
+            PROCEDURE Main:
+              LET b = NEW SB WITH 16
+              CALL b.append WITH "hi"
+              CALL b.toString GIVING result
+              DISPLAY "built: [{result}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("built: [hi]" in out,
+            "NEW SB WITH 16 must link the StringBuilder(int) ctor (not the guessed (long)), got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
     // F6 (decision lock) — an uninitialized DECIMAL default zero is REPRESENTED identically to an
     // explicit `= 0`: both are stored as `BigDecimal.ZERO` (scale 0). The F6 decision (keep the
     // stored default == explicit zero) still holds; F18 only changed how a DECIMAL is DISPLAYED —
