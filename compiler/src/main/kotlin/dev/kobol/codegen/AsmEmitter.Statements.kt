@@ -105,12 +105,14 @@ internal fun AsmEmitter.emitMove(ctx: MethodContext, stmt: MoveStatement) {
     internal fun AsmEmitter.resolveRefFinalType(ctx: MethodContext, ref: Reference): KobolType {
         val name = ref.parts[0]
         var type = ctx.getLocal(name)?.type ?: resolveSymbolType(ctx, name)
-        if (ref.parts.size > 1 && type is KobolType.RecordRefType) {
-            val recSym = checker.symbols.resolve(type.name) as? Symbol.RecordSymbol
-            if (recSym != null) {
-                type = recSym.fields[ref.parts[1]]
-                    ?: if (recSym.conditions.containsKey(ref.parts[1])) KobolType.BooleanType else type
-            }
+        // Walk the FULL field chain (rec.f1.f2…fn), not just one level — a deep final field of a
+        // decimal/money type must rescale to ITS declared scale (P4), and a deep INTEGER final
+        // must report category-2 wideness for the store-path rotation. Depth-2 behavior unchanged.
+        for (i in 1 until ref.parts.size) {
+            val rec = type as? KobolType.RecordRefType ?: break
+            val recSym = checker.symbols.resolve(rec.name) as? Symbol.RecordSymbol ?: break
+            type = recSym.fields[ref.parts[i]]
+                ?: if (recSym.conditions.containsKey(ref.parts[i])) KobolType.BooleanType else type
         }
         return type
     }

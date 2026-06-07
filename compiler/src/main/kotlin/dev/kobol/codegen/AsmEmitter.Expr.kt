@@ -867,37 +867,54 @@ internal fun AsmEmitter.emitStore(ctx: MethodContext, ref: Reference) {
                 mv.visitFieldInsn(PUTSTATIC, ctx.owner, javaIdent(name), recDesc(ctx.owner, kType))
             }
         } else {
-            // For dotted assignment (rec.field = expr): load the record, then set field
-            // This is complex — simplified: swap value into field using PUTFIELD
-            val recordLocal = ctx.getLocal(ref.parts[0])
-            val kType0 = resolveSymbolType(ctx, ref.parts[0])
-            val innerType = (kType0 as? KobolType.RecordRefType)?.name
-            if (innerType != null) {
-                val innerClass = "${ctx.owner}\$${javaClass(innerType)}"
-                val fieldName  = javaIdent(ref.parts[1])
-                val recSym = checker.symbols.resolve(innerType) as? Symbol.RecordSymbol
-                val fieldType  = recSym?.fields?.get(ref.parts[1]) ?: KobolType.UnknownType
-                // Stack: [value] → need [ref, value] for PUTFIELD.
-                // Load the base object from local (if it's a local var) or static field.
-                if (recordLocal != null) {
-                    loadLocal(mv, kType0, recordLocal.slot)
-                } else {
-                    mv.visitFieldInsn(GETSTATIC, ctx.owner, javaIdent(ref.parts[0]), recDesc(ctx.owner, kType0))
-                }
-                // Stack now: [value, ref] → rotate to [ref, value].
-                // Use wide path (DUP_X2+POP) for category-2 values (long/INTEGER),
-                // narrow path (SWAP) for category-1 values (references, booleans, etc).
-                if (isWide(fieldType)) {
-                    mv.visitInsn(DUP_X2)   // [ref, value, ref]
-                    mv.visitInsn(POP)      // [ref, value]
-                } else {
-                    mv.visitInsn(SWAP)     // [ref, value]
-                }
-                mv.visitFieldInsn(PUTFIELD, innerClass, fieldName, jvmDescriptor(fieldType))
+            // Dotted assignment (`rec.f1.f2…fn = value`). The value is already on the stack.
+            // Walk parts[0..n-2] as a record-load chain — mirroring loadRef's RecordRefType arm,
+            // including the CHECKCAST that un-erases each intermediate record (a record field's
+            // descriptor erases to Object — kobolDescriptor) — leaving the owner of the FINAL field
+            // on the stack ABOVE the value, then PUTFIELD the final field using the FINAL field's
+            // wideness. (Previously this only handled depth-2 AND picked the rotation by the wrong
+            // field's wideness, so a deep write of a long emitted SWAP over a category-2 value →
+            // VerifyError; a deep write of a reference wrote the wrong intermediate field.)
+            val rootLocal = ctx.getLocal(name)
+            val rootType  = resolveSymbolType(ctx, name)
+            // Load the root object (it lands on top of the value already on the stack).
+            if (rootLocal != null) {
+                loadLocal(mv, rootType, rootLocal.slot)
             } else {
-                // Cannot resolve record — discard value to keep stack balanced.
-                val valType = resolveSymbolType(ctx, name)
-                mv.visitInsn(if (isWide(valType)) POP2 else POP)
+                mv.visitFieldInsn(GETSTATIC, ctx.owner, javaIdent(name), recDesc(ctx.owner, rootType))
+            }
+            val lastIdx = ref.parts.size - 1
+            var curType: KobolType = rootType
+            var ownerClass: String? = null
+            var finalField: String? = null
+            var finalType: KobolType = KobolType.UnknownType
+            for (i in 1..lastIdx) {
+                val rec = curType as? KobolType.RecordRefType ?: break
+                val recName = "${ctx.owner}\$${javaClass(rec.name)}"
+                mv.visitTypeInsn(CHECKCAST, recName)   // no-op when already concrete (root via GETSTATIC)
+                val recSym = checker.symbols.resolve(rec.name) as? Symbol.RecordSymbol
+                val fType  = recSym?.fields?.get(ref.parts[i]) ?: KobolType.UnknownType
+                if (i == lastIdx) {
+                    ownerClass = recName; finalField = javaIdent(ref.parts[i]); finalType = fType
+                } else {
+                    mv.visitFieldInsn(GETFIELD, recName, javaIdent(ref.parts[i]), jvmDescriptor(fType))
+                    curType = fType
+                }
+            }
+            if (ownerClass != null && finalField != null) {
+                // Stack: [value, owner] → rotate to [owner, value].
+                // Wide path (DUP_X2+POP) for category-2 finals (long/INTEGER), narrow (SWAP) otherwise.
+                if (isWide(finalType)) {
+                    mv.visitInsn(DUP_X2)   // [owner, value, owner]
+                    mv.visitInsn(POP)      // [owner, value]
+                } else {
+                    mv.visitInsn(SWAP)     // [owner, value]
+                }
+                mv.visitFieldInsn(PUTFIELD, ownerClass, finalField, jvmDescriptor(finalType))
+            } else {
+                // Chain did not resolve to a record field — discard both to keep the stack balanced.
+                mv.visitInsn(POP)          // owner
+                mv.visitInsn(if (isWide(resolveRefFinalType(ctx, ref))) POP2 else POP)  // value
             }
         }
     }

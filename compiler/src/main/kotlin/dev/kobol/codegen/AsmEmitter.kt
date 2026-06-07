@@ -163,7 +163,18 @@ class AsmEmitter(
     // -------------------------------------------------------------------------
 
     private fun emitRecordClass(rec: RecordDecl, outerName: String): ByteArray {
-        val cw   = ClassWriter(ClassWriter.COMPUTE_FRAMES)
+        // COMPUTE_FRAMES merges stack types at branch targets via getCommonSuperClass, which
+        // reflectively loads both classes. Our generated record/variant classes ("$outerName$…")
+        // are NOT on the compiler's classpath → the default impl throws ClassNotFoundException
+        // (hit by the null-guard branch in emitRecordCopy's deep copy). They all extend Object
+        // directly (no record extends another), so Object is the correct common super for any
+        // pair involving one; defer to the default only for real (loadable) JDK/runtime types.
+        val cw   = object : ClassWriter(ClassWriter.COMPUTE_FRAMES) {
+            override fun getCommonSuperClass(type1: String, type2: String): String =
+                if (type1.startsWith("$outerName\$") || type2.startsWith("$outerName\$"))
+                    "java/lang/Object"
+                else super.getCommonSuperClass(type1, type2)
+        }
         val name = "$outerName\$${javaClass(rec.name)}"
         cw.visit(JVM_VERSION, ACC_PUBLIC or ACC_STATIC or ACC_FINAL,
             name, null, "java/lang/Object", null)
@@ -204,8 +215,8 @@ class AsmEmitter(
         // toString
         emitRecordToString(cw, name, rec)
 
-        // Synthetic shallow-copy method for value semantics (#23): `ADD buf TO list`
-        // must snapshot the buffer, not alias it.
+        // Synthetic deep-copy method for value semantics (#23): `ADD buf TO list` (and MOVE/PUT)
+        // must snapshot the buffer, not alias it — recursively, so nested records don't alias either.
         emitRecordCopy(cw, name, rec)
 
         // Synthetic boolean predicate methods for each CONDITION (e.g. HighValue WHEN balance > 50000)
@@ -219,10 +230,13 @@ class AsmEmitter(
      * Emit `public <Record> copy()` — a shallow clone (new instance, each field copied
      * across by value/reference). Records are mutable buffers, so appending one to a LIST
      * or assigning it must snapshot it; otherwise later mutation of the buffer is visible
-     * through every stored reference (#23). Shallow is correct: nested records are
-     * themselves copied at their own copy sites; scalars are immutable.
+     * through every stored reference (#23). Value semantics holds to ALL depths: a
+     * record-typed field is itself recursively `copy()`d here (deep copy), so a clone shares
+     * no buffer with the source at any level; scalars/String/BigDecimal are immutable → a
+     * reference copy is already a value copy.
      */
     private fun emitRecordCopy(cw: ClassWriter, name: String, rec: RecordDecl) {
+        val owner = name.substringBefore('$')           // program class (records nest flat under it)
         val m = cw.visitMethod(ACC_PUBLIC, "copy", "()L$name;", null, null)
         m.visitCode()
         m.visitTypeInsn(NEW, name)
@@ -230,10 +244,23 @@ class AsmEmitter(
         m.visitMethodInsn(INVOKESPECIAL, name, "<init>", "()V", false)
         m.visitVarInsn(ASTORE, 1)                       // local 1 = fresh instance
         for (f in rec.fields) {
-            val desc = jvmDescriptor(checker.toKobolType(f.type))
+            val ft   = checker.toKobolType(f.type)
+            val desc = jvmDescriptor(ft)
             m.visitVarInsn(ALOAD, 1)                    // target
             m.visitVarInsn(ALOAD, 0)                    // this
-            m.visitFieldInsn(GETFIELD, name, javaIdent(f.name), desc)
+            m.visitFieldInsn(GETFIELD, name, javaIdent(f.name), desc)   // value (records erase to Object)
+            if (ft is KobolType.RecordRefType) {
+                // Deep copy the nested record: snapshot it so the clone does not alias the source's
+                // buffer. The field erases to Object — CHECKCAST to the concrete record class before
+                // INVOKEVIRTUAL copy(). Guard null (uninitialized field) so copy stays null, no NPE.
+                val recClass = "$owner\$${javaClass(ft.name)}"
+                val skip = Label()
+                m.visitInsn(DUP)
+                m.visitJumpInsn(IFNULL, skip)           // null → leave null on stack, skip copy()
+                m.visitTypeInsn(CHECKCAST, recClass)
+                m.visitMethodInsn(INVOKEVIRTUAL, recClass, "copy", "()L$recClass;", false)
+                m.visitLabel(skip)
+            }
             m.visitFieldInsn(PUTFIELD, name, javaIdent(f.name), desc)
         }
         m.visitVarInsn(ALOAD, 1)

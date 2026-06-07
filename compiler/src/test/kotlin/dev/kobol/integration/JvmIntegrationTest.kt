@@ -1325,6 +1325,64 @@ class JvmIntegrationTest {
         assertTrue("bx=apple 7" in out, "nested record field read must verify and yield the stored value, got:\n$out")
     }
 
+    // (D) Write-hole — a deep field-chain WRITE (`bx.it.qty`) previously only walked ONE level:
+    // emitStore treated parts[1] ("it", a record = category-1) as the final field and PUTFIELDed the
+    // value there, picking the rotation by `it`'s wideness. For an INTEGER value (a category-2 long)
+    // that emitted `SWAP` over a long → java.lang.VerifyError ("long_2nd is not assignable to
+    // category1 type"), and even for reference values it wrote the wrong (intermediate) field. The
+    // store path must walk the full chain (parts[0..n-2] as record loads) and PUTFIELD the FINAL
+    // field with the FINAL field's wideness — mirroring loadRef's chain walk.
+    @Test fun `nested record field write of an INTEGER verifies and stores the value (D)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            RECORD Box:
+              it : Item
+            DATA:
+              bx : Box
+            PROCEDURE Main:
+              MOVE Box { it: Item { name: "apple", qty: 7 } } TO bx
+              MOVE 9 TO bx.it.qty
+              MOVE "pear" TO bx.it.name
+              DISPLAY "bx={bx.it.name} {bx.it.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("bx=pear 9" in out, "deep field-chain write must verify and update the final field, got:\n$out")
+    }
+
+    // (C) Deep value semantics — `MOVE a TO b` snapshots via the synthetic `copy()`, but `copy()`
+    // was SHALLOW: it reference-copied each field, so a record-typed field left `b.it === a.it`.
+    // Mutating the source's nested field (`a.it.qty`) then leaked into the already-copied `b`.
+    // Value semantics must hold to ALL depths: emitRecordCopy must `copy()` record-typed fields
+    // recursively. (Reachable only now that deep nested writes verify — bug (D) above.)
+    @Test fun `MOVE deep-copies a nested record field (C)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            RECORD Box:
+              it : Item
+            DATA:
+              a : Box
+              b : Box
+            PROCEDURE Main:
+              MOVE Box { it: Item { name: "apple", qty: 7 } } TO a
+              MOVE a TO b
+              MOVE 99 TO a.it.qty
+              MOVE "banana" TO a.it.name
+              DISPLAY "b={b.it.name} {b.it.qty}"
+              DISPLAY "a={a.it.name} {a.it.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("b=apple 7" in out, "MOVE dest must deep-copy nested record, not alias a.it, got:\n$out")
+        assertTrue("a=banana 99" in out, "source nested mutation must be visible on the source, got:\n$out")
+    }
+
     // #12 — MAP PUT/GET previously did not parse at all ("Unexpected token 'PUT'"). Now they
     // are contextual statements over a java.util.Map (LinkedHashMap): PUT inserts/overwrites,
     // GET looks up and unboxes into the target.
