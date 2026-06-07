@@ -222,4 +222,32 @@ class ClasspathSymbolResolverTest {
         assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
         assertEquals("(J)J", r.sig.descriptor)
     }
+
+    // ─── F15 — parameter nullability surfaced from @Metadata ─────────────────────────────
+
+    @Test fun `resolveByArgs surfaces a Kotlin non-null parameter as not nullable (F15)`() {
+        // `fun needsNonNull(s: String): Int` — same erased `(Ljava/lang/String;)I` as its nullable
+        // twin; the non-null `s` is readable only from @Metadata, surfaced on sig.paramNullable.
+        val r = resolver.resolveByArgs(
+            "dev/kobol/testfixture/KotlinNullableApiKt", "needsNonNull", listOf("Ljava/lang/String;"),
+        )
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertEquals(listOf(false), r.sig.paramNullable)
+    }
+
+    @Test fun `resolveByArgs surfaces a Kotlin nullable parameter as nullable (F15)`() {
+        // `fun acceptsNullable(s: String?): Int` — identical descriptor, but the parameter is `T?`.
+        val r = resolver.resolveByArgs(
+            "dev/kobol/testfixture/KotlinNullableApiKt", "acceptsNullable", listOf("Ljava/lang/String;"),
+        )
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertEquals(listOf(true), r.sig.paramNullable)
+    }
+
+    @Test fun `resolveByArgs leaves paramNullable empty for a Java method (no metadata) (F15)`() {
+        // A JDK method has no @Metadata → nullability is unknown, NOT invented as non-null.
+        val r = resolver.resolveByArgs("java/lang/Math", "abs", listOf("J"))
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertTrue(r.sig.paramNullable.isEmpty(), "Java method must carry no nullability claim")
+    }
 }

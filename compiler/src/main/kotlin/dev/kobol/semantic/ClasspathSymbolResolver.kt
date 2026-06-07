@@ -40,6 +40,20 @@ data class JvmMethodSig(
      * false for a Java/JDK method (no metadata). Resolved for a call by [resolveSuspend].
      */
     val isSuspend: Boolean = false,
+    /**
+     * Per-USER-parameter nullability from `@Metadata` (challenge **F15** — parameter nullability).
+     * `paramNullable[i]` is true when the Kotlin declared value parameter `i` has a nullable type
+     * (`T?`). Empty for a Java/JDK method (no metadata) or a no-arg method. These are the
+     * Kotlin-declared parameters only — the synthetic trailing `Continuation` of a `suspend`
+     * method is NOT a declared parameter and does not appear here, so this list is one shorter
+     * than the erased [descriptor]'s parameter count for a suspend method (it matches the user
+     * call's arity). A Kotlin NON-null parameter fed a possibly-null value (an uninitialized
+     * `JAVA-OBJECT`, or a nullable Kotlin return) fails `Intrinsics.checkNotNullParameter` at the
+     * callee's entry — surfaced here so that null-safety analysis can tell a tolerant nullable
+     * sink from a strict non-null one. Kobol warns the possibly-null SOURCE (W019 / W237), so this
+     * data is currently consumed only by tests; it is the foundation for future flow-based checks.
+     */
+    val paramNullable: List<Boolean> = emptyList(),
 )
 
 /**
@@ -114,12 +128,14 @@ class ClasspathSymbolResolver(classpath: List<String>) {
         // in @Metadata. Decode them and mark the matching sigs (keyed by name + JVM descriptor).
         val nullableByKey = nullableKeysFromParsed(parsed)
         val suspendByKey  = suspendKeysFromParsed(parsed)
-        return if (nullableByKey.isEmpty() && suspendByKey.isEmpty()) raw.methods
+        val paramNullByKey = paramNullableFromParsed(parsed)
+        return if (nullableByKey.isEmpty() && suspendByKey.isEmpty() && paramNullByKey.isEmpty()) raw.methods
         else raw.methods.map { sig ->
             val key = sig.name + sig.descriptor
             sig.copy(
                 returnNullable = sig.returnNullable || nullableByKey.contains(key),
                 isSuspend = suspendByKey.contains(key),
+                paramNullable = paramNullByKey[key] ?: sig.paramNullable,
             )
         }
     }
@@ -273,6 +289,28 @@ class ClasspathSymbolResolver(classpath: List<String>) {
             keys.add(sig.name + sig.descriptor)
         }
         return keys
+    }
+
+    /**
+     * `name + JVM descriptor` → per-declared-parameter nullability (challenge **F15** — parameter
+     * nullability). Keyed by the SAME real JVM signature the byte read produces, so it lands on the
+     * matching [JvmMethodSig]. A multifile-class FACADE has no functions of its own (handled by the
+     * part-class union in [readMethods]); empty for a non-Kotlin metadata.
+     */
+    private fun paramNullableFromParsed(parsed: KotlinClassMetadata?): Map<String, List<Boolean>> = when (parsed) {
+        is KotlinClassMetadata.Class              -> paramNullableOf(parsed.kmClass.functions)
+        is KotlinClassMetadata.FileFacade         -> paramNullableOf(parsed.kmPackage.functions)
+        is KotlinClassMetadata.MultiFileClassPart -> paramNullableOf(parsed.kmPackage.functions)
+        else                                      -> emptyMap()
+    }
+
+    private fun paramNullableOf(functions: List<KmFunction>): Map<String, List<Boolean>> {
+        val map = HashMap<String, List<Boolean>>()
+        for (fn in functions) {
+            val sig = fn.signature ?: continue
+            map[sig.name + sig.descriptor] = fn.valueParameters.map { it.type.isNullable }
+        }
+        return map
     }
 
     /** [owner]'s direct superclass + interfaces (slashed names), or null when unreadable. */

@@ -15,3 +15,15 @@ package dev.kobol.testfixture
 fun maybeNull(): String? = null
 
 fun alwaysPresent(): String = "present"
+
+/**
+ * Parameter-nullability twins (challenge **F15**). Same erased JVM descriptor
+ * `(Ljava/lang/String;)I` — the parameter's `T` vs `T?` lives only in `@Metadata`,
+ * so the resolver must read it from there. A non-null parameter compiles an
+ * `Intrinsics.checkNotNullParameter` at the callee's entry; a nullable one does not.
+ */
+@Suppress("unused")
+fun needsNonNull(s: String): Int = s.length
+
+@Suppress("unused")
+fun acceptsNullable(s: String?): Int = s?.length ?: 0

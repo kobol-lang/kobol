@@ -252,20 +252,30 @@ class TypeChecker(
             }
             val kType = if (item.type != null) toKobolType(item.type)
                         else item.initializer?.let { inferType(it) } ?: KobolType.UnknownType
-            // #19: temporal types have NO implicit default (the spec no longer
-            // promises "current date" — that was COBOL hidden state, §1.7). An
-            // uninitialized DATE/TIME/DATETIME is null and NPEs on first use, so
-            // flag it at the declaration site instead of leaving a runtime landmine.
-            if (item.initializer == null &&
-                (kType is KobolType.DateType || kType is KobolType.TimeType || kType is KobolType.DateTimeType)) {
-                val tn = when (kType) {
-                    is KobolType.DateType     -> "DATE"
-                    is KobolType.TimeType     -> "TIME"
-                    is KobolType.DateTimeType -> "DATETIME"
+            // #19 / F15: a reference-typed field with no implicit default is null until assigned,
+            // and NPEs on first use — flag it at the declaration site instead of leaving a runtime
+            // landmine. Temporal types (DATE/TIME/DATETIME) lost their COBOL "current date" hidden
+            // default (§1.7). A JAVA-OBJECT (an imported 3rd-party/Kotlin class held in a field, F26)
+            // defaults to JVM null too (AsmEmitter clinit leaves it 0/false/null); passing such a
+            // null into a Kotlin NON-null parameter trips `Intrinsics.checkNotNullParameter` at the
+            // callee's entry. (This is the source-side guard; Kobol has no null literal, so once
+            // every uninitialized reference field is flagged here and every nullable Kotlin return
+            // is flagged at W237, there is no unwarned null source.)
+            if (item.initializer == null) {
+                val hint: Pair<String, String>? = when (kType) {
+                    is KobolType.DateType       -> "DATE" to "${item.name} : DATE = TODAY"
+                    is KobolType.TimeType       -> "TIME" to "${item.name} : TIME = NOW"
+                    is KobolType.DateTimeType   -> "DATETIME" to "${item.name} : DATETIME = NOW"
+                    is KobolType.JavaObjectType -> "JAVA-OBJECT" to
+                        "${item.name} : ${kType.ownerName ?: "Type"} = NEW ${kType.ownerName ?: "Type"}"
+                    else -> null
                 }
-                warning("W019", "'${item.name}' ($tn) has no initializer and no implicit default; it is null " +
-                    "until assigned. Initialize it explicitly (e.g. `${item.name} : DATE = TODAY`) to avoid a " +
-                    "NullPointerException on first use.", item.pos)
+                if (hint != null) {
+                    val (tn, example) = hint
+                    warning("W019", "'${item.name}' ($tn) has no initializer and no implicit default; it is null " +
+                        "until assigned. Initialize it explicitly (e.g. `$example`) to avoid a " +
+                        "NullPointerException on first use.", item.pos)
+                }
             }
             symbols.define(Symbol.Variable(item.name, kType, mutable = true, pos = item.pos))
         }

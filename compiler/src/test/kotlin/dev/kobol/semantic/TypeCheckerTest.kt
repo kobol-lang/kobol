@@ -84,6 +84,38 @@ class TypeCheckerTest {
         assertFalse("W019" in tc.diagnostics.warnings.map { it.code }, "initialized DATE must not warn")
     }
 
+    // F15: a JAVA-OBJECT field defaults to JVM null too (AsmEmitter clinit), so an uninitialized
+    // one is the same null-until-assigned landmine as DATE/TIME — feeding it to a Kotlin non-null
+    // parameter trips Intrinsics.checkNotNullParameter at the callee. Flag it at the declaration.
+    @Test fun `uninitialized JAVA-OBJECT field warns W019 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              buf : SB
+            PROCEDURE Main:
+              DISPLAY "x"
+            END-PROCEDURE
+        """.trimIndent())
+        assertTrue("W019" in tc.diagnostics.warnings.map { it.code },
+            "expected W019 for uninitialized JAVA-OBJECT; warnings=${tc.diagnostics.warnings.map { it.code }}")
+        assertFalse(tc.diagnostics.hasErrors, "W019 is a warning, not an error")
+    }
+
+    @Test fun `initialized JAVA-OBJECT field does not warn W019 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              buf : SB = NEW SB
+            PROCEDURE Main:
+              DISPLAY "x"
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse("W019" in tc.diagnostics.warnings.map { it.code },
+            "a NEW-initialized JAVA-OBJECT must not warn; warnings=${tc.diagnostics.warnings.map { it.code }}")
+    }
+
     @Test fun `procedure with parameters is clean`() {
         expectClean("""
             PROGRAM T
