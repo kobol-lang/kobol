@@ -1,5 +1,6 @@
 package dev.kobol.semantic
 
+import org.objectweb.asm.AnnotationVisitor
 import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.MethodVisitor
@@ -7,6 +8,12 @@ import org.objectweb.asm.Opcodes
 import org.objectweb.asm.Type
 import java.io.File
 import java.net.URLClassLoader
+import kotlin.metadata.KmFunction
+import kotlin.metadata.KmProperty
+import kotlin.metadata.isNullable
+import kotlin.metadata.jvm.KotlinClassMetadata
+import kotlin.metadata.jvm.getterSignature
+import kotlin.metadata.jvm.signature
 
 /** One method signature read from a real `.class` on the compile classpath. */
 data class JvmMethodSig(
@@ -17,6 +24,13 @@ data class JvmMethodSig(
     val isPublic: Boolean,
     /** True if declared varargs (`ACC_VARARGS`); the last parameter is the variadic array. */
     val isVarargs: Boolean = false,
+    /**
+     * True when the declaring class is Kotlin and this method's return type is nullable (`T?`)
+     * per its `@Metadata` (challenge **F15**). Always false for a Java/JDK class (no metadata) —
+     * the erased JVM descriptor cannot express nullability. Kobol has no null, so a nullable
+     * return is a silent-NPE landmine the type checker warns on.
+     */
+    val returnNullable: Boolean = false,
 )
 
 /**
@@ -64,9 +78,50 @@ class ClasspathSymbolResolver(classpath: List<String>) {
         cache.getOrPut(ownerInternalName) { readMethods(ownerInternalName) }
 
     private fun readMethods(owner: String): List<JvmMethodSig>? {
+        val raw = readRaw(owner) ?: return null
+        val parsed = raw.metadata?.let { runCatching { KotlinClassMetadata.readLenient(it) }.getOrNull() }
+
+        // F28: a MULTIFILE-CLASS FACADE (`k=4`, every published library's top-level fns, e.g.
+        // kotlin-stdlib `StringsKt`) declares NO public API methods of its own — its `<clinit>` is
+        // all that's here. The real static API lives in the part classes (`k=5`), reached either by
+        // a forwarder (default) or by inheritance (stdlib's `-Xmultifile-parts-inherit`); the facade
+        // metadata names only the parts. So the facade's effective methods = the union of the part
+        // classes' methods, EACH carrying its own part `@Metadata` nullability (F15). Without this,
+        // a `CALL StringsKt.toIntOrNull` never resolves here → falls back to a guess → no W237 →
+        // silent NPE on the nullable `Int?` return (P3). Parts are `k=5`, never facades, so the
+        // recursion is one level.
+        if (parsed is KotlinClassMetadata.MultiFileClassFacade) {
+            val unioned = LinkedHashMap<String, JvmMethodSig>()
+            for (part in parsed.partClassNames) {
+                // partClassNames are JVM internal (slashed) names; normalize defensively.
+                val partMethods = methodsOf(part.replace('.', '/')) ?: continue
+                for (m in partMethods) unioned.putIfAbsent(m.name + m.descriptor, m)
+            }
+            return unioned.values.toList()
+        }
+
+        // F15: a Kotlin method's nullable return (`T?`) erases to the same JVM descriptor as a
+        // non-null one — the difference is only in @Metadata. Decode it and mark the matching sigs.
+        val nullableByKey = nullableKeysFromParsed(parsed)
+        return if (nullableByKey.isEmpty()) raw.methods
+        else raw.methods.map { sig ->
+            if (nullableByKey.contains(sig.name + sig.descriptor)) sig.copy(returnNullable = true) else sig
+        }
+    }
+
+    /** A class's declared methods + raw `@Metadata` from one ASM byte pass, or null if unreadable. */
+    private class RawClass(val methods: List<JvmMethodSig>, val metadata: Metadata?)
+
+    private fun readRaw(owner: String): RawClass? {
         val bytes = classBytes(owner) ?: return null
         val sigs = ArrayList<JvmMethodSig>()
+        val metadata = MetadataCollector()
         ClassReader(bytes).accept(object : ClassVisitor(Opcodes.ASM9) {
+            // Collect the class's @Metadata (F15) in the SAME byte-read pass — no class load, no
+            // extra fetch. Non-Kotlin classes have no such annotation, so the collector stays empty.
+            override fun visitAnnotation(descriptor: String, visible: Boolean): AnnotationVisitor? =
+                if (descriptor == "Lkotlin/Metadata;") metadata else super.visitAnnotation(descriptor, visible)
+
             override fun visitMethod(
                 access: Int, name: String, descriptor: String,
                 signature: String?, exceptions: Array<out String>?,
@@ -88,7 +143,97 @@ class ClasspathSymbolResolver(classpath: List<String>) {
                 return null
             }
         }, ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
-        return sigs
+        return RawClass(sigs, metadata.build())
+    }
+
+    /**
+     * Collects the raw fields of a `@kotlin/Metadata` annotation during an ASM class read and
+     * rebuilds a real [Metadata] (challenge **F15**) — no class loading, the same bytes-only path
+     * E2 established (P1). Decoding (→ nullable-return keys) lives in [nullableReturnKeys] at the
+     * resolver level, where it can recurse into multifile-facade part classes (**F28**).
+     */
+    private class MetadataCollector : AnnotationVisitor(Opcodes.ASM9) {
+        private var kind = 1
+        private var extraInt = 0
+        private var extraString = ""
+        private var packageName = ""
+        private val metadataVersion = ArrayList<Int>()
+        private val data1 = ArrayList<String>()
+        private val data2 = ArrayList<String>()
+
+        override fun visit(name: String?, value: Any?) {
+            when (name) {
+                "k"  -> kind = value as? Int ?: kind
+                "xi" -> extraInt = value as? Int ?: extraInt
+                "xs" -> extraString = value as? String ?: extraString
+                "pn" -> packageName = value as? String ?: packageName
+                // ASM delivers a primitive int[] annotation array (the metadata version `mv`) as a
+                // whole array through visit(), not element-by-element via visitArray (that path is
+                // only taken for the String arrays d1/d2). Without mv, readLenient rejects the
+                // metadata as malformed.
+                "mv" -> (value as? IntArray)?.let { metadataVersion.addAll(it.toList()) }
+            }
+        }
+
+        override fun visitArray(name: String?): AnnotationVisitor = object : AnnotationVisitor(Opcodes.ASM9) {
+            override fun visit(n: String?, value: Any?) {
+                when (name) {
+                    "mv" -> (value as? Int)?.let { metadataVersion.add(it) }
+                    "d1" -> (value as? String)?.let { data1.add(it) }
+                    "d2" -> (value as? String)?.let { data2.add(it) }
+                }
+            }
+        }
+
+        /** The collected annotation as a real [Metadata], or null when no payload was seen. */
+        fun build(): Metadata? {
+            if (data1.isEmpty() && data2.isEmpty()) return null
+            // Annotation constructors are callable since Kotlin 1.3.
+            return Metadata(
+                kind = kind,
+                metadataVersion = metadataVersion.toIntArray(),
+                data1 = data1.toTypedArray(),
+                data2 = data2.toTypedArray(),
+                extraString = extraString,
+                packageName = packageName,
+                extraInt = extraInt,
+            )
+        }
+    }
+
+    /**
+     * The set of `name + JVM descriptor` keys whose Kotlin return type is nullable (`T?`) for an
+     * already-parsed metadata, via `kotlin-metadata-jvm` — empty for a non-Kotlin / unsupported
+     * metadata (fail safe — never invents a nullability claim). The `k=4` MULTIFILE-CLASS FACADE
+     * is NOT handled here: it declares no functions of its own (see [readMethods] — its methods +
+     * nullability are unioned from the part classes).
+     */
+    private fun nullableKeysFromParsed(parsed: KotlinClassMetadata?): Set<String> = when (parsed) {
+        is KotlinClassMetadata.Class              -> nullableKeysOf(parsed.kmClass.functions, parsed.kmClass.properties)
+        is KotlinClassMetadata.FileFacade         -> nullableKeysOf(parsed.kmPackage.functions, parsed.kmPackage.properties)
+        is KotlinClassMetadata.MultiFileClassPart -> nullableKeysOf(parsed.kmPackage.functions, parsed.kmPackage.properties)
+        else                                      -> emptySet()
+    }
+
+    /**
+     * `name + JVM descriptor` keys of every nullable-returning function AND nullable property
+     * GETTER. A Kotlin property `val foo: T?` is invisible in [KmFunction]s — it lives in
+     * [KmProperty] with a [getterSignature] — so the `obj.field` accessor path (#5) needs the
+     * getter keyed here too, else its nullability is lost.
+     */
+    private fun nullableKeysOf(functions: List<KmFunction>, properties: List<KmProperty>): Set<String> {
+        val keys = HashSet<String>()
+        for (fn in functions) {
+            if (!fn.returnType.isNullable) continue
+            val sig = fn.signature ?: continue   // JvmMethodSignature: name + descriptor
+            keys.add(sig.name + sig.descriptor)
+        }
+        for (prop in properties) {
+            if (!prop.returnType.isNullable) continue
+            val getter = prop.getterSignature ?: continue
+            keys.add(getter.name + getter.descriptor)
+        }
+        return keys
     }
 
     /** [owner]'s direct superclass + interfaces (slashed names), or null when unreadable. */

@@ -1493,6 +1493,33 @@ class JvmIntegrationTest {
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
 
+    // ─── #5 — Kotlin/Java property accessors via `obj.field` ──────────────────────────
+    // `obj.field` on a JAVA-OBJECT used to be a blind hardcode: the type checker typed ANY field as
+    // TEXT and codegen emitted nothing (`else -> break`), leaving the object itself on the stack —
+    // a P3 landmine (type-checks clean, wrong value at run). The fix resolves the property's getter
+    // off the compile classpath (the SAME path a `CALL obj.getField` takes, P1), infers the real
+    // property type, and emits the getter call.
+    @Test fun `obj field reads a Kotlin property via its getter (#5)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinBean" AS Bean
+            PROCEDURE Main:
+              LET b = NEW Bean WITH "Ada"
+              DISPLAY b.name
+              DISPLAY "score={b.score}"
+              IF b.active:
+                DISPLAY "is-active"
+              END-IF
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "Ada" },
+            "b.name must read the String property via getName(); got:\n$out")
+        assertTrue("score=42" in out, "b.score must read the int property via getScore(); got:\n$out")
+        assertTrue("is-active" in out, "b.active must read the Boolean property via getActive(); got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
     // ─── F14 — interop CALL as an expression (CALL in COMPUTE/LET position) ───────────
     // A `CALL` in expression position must resolve its REAL return type at type-check time
     // (E2 classpath read), type the LHS from it, and leave the coerced value on the stack —

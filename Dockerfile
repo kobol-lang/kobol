@@ -25,6 +25,11 @@ RUN ./gradlew :compiler:jar --no-daemon
 # =============================================================================
 FROM ghcr.io/graalvm/native-image-community:21-muslib AS native-builder
 
+# The GraalVM muslib image is Oracle Linux 9 minimal and ships without `xargs`, which the
+# Gradle wrapper script requires to assemble JVM args — without it gradlew aborts at launch
+# ("xargs is not available") before any build runs. findutils provides xargs.
+RUN microdnf install -y findutils && microdnf clean all
+
 WORKDIR /build
 
 # Copy Gradle wrapper and build scripts first (better layer caching)

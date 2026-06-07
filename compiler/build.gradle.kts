@@ -12,6 +12,9 @@ dependencies {
     implementation(libs.asm.core)
     implementation(libs.asm.util)
 
+    // Kotlin @Metadata decode for compile-time interop nullability (challenge F15)
+    implementation(libs.kotlin.metadata)
+
     // LSP server (Phase 7)
     implementation(libs.lsp4j)
 

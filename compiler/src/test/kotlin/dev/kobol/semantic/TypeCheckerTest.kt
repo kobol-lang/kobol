@@ -810,4 +810,213 @@ class TypeCheckerTest {
             dev.kobol.KobolHome.interopClasspath = saved
         }
     }
+
+    // -------------------------------------------------------------------------
+    // F15 — Kotlin @Metadata read (nullable-return detection)
+    // -------------------------------------------------------------------------
+
+    // A Kotlin method returning `String?` and one returning `String` erase to the SAME JVM
+    // descriptor `()Ljava/lang/String;`; the nullable difference lives ONLY in @Metadata. Kobol
+    // has no null, so a nullable result silently NPEs when used (type-checks clean = P3 landmine).
+    // The resolver must decode the metadata and the type checker must warn (W237) on the nullable
+    // call but NOT the non-null one. The fixture is a real compiled Kotlin file facade on the test
+    // classpath (`dev/kobol/testfixture/KotlinNullableApiKt`), reachable via the resolver's
+    // system-resource fallback.
+    @Test fun `interop CALL on a nullable-returning Kotlin method warns W237 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinNullableApiKt" AS NA
+            PROCEDURE Main:
+              LET a = CALL NA.maybeNull
+              DISPLAY a
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "the call resolves; nullability is a warning, not an error. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+        assertTrue(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "expected W237 for a nullable Kotlin return; warnings=${tc.diagnostics.warnings.map { it.code }}",
+        )
+    }
+
+    @Test fun `interop CALL on a non-null Kotlin method does not warn W237 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinNullableApiKt" AS NA
+            PROCEDURE Main:
+              LET b = CALL NA.alwaysPresent
+              DISPLAY b
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(tc.diagnostics.hasErrors, "must resolve clean")
+        assertFalse(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "a non-null Kotlin return must NOT warn W237",
+        )
+    }
+
+    // The CALL-STATEMENT GIVING form captures the same nullable return into a variable, so it is
+    // the same P3 landmine as the expression form — W237 must fire on every call form (P6), not
+    // only `LET x = CALL …`. Fire-and-forget (no GIVING) discards the value, so no warning there.
+    @Test fun `interop CALL statement GIVING a nullable Kotlin return warns W237 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinNullableApiKt" AS NA
+            DATA:
+              a : TEXT = ""
+            PROCEDURE Main:
+              CALL NA.maybeNull GIVING a
+              DISPLAY a
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "the call resolves; nullability is a warning, not an error. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+        assertTrue(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "expected W237 for a nullable Kotlin return captured into GIVING; warnings=${tc.diagnostics.warnings.map { it.code }}",
+        )
+    }
+
+    @Test fun `interop CALL statement GIVING a non-null Kotlin return does not warn W237 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinNullableApiKt" AS NA
+            DATA:
+              b : TEXT = ""
+            PROCEDURE Main:
+              CALL NA.alwaysPresent GIVING b
+              DISPLAY b
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(tc.diagnostics.hasErrors, "must resolve clean")
+        assertFalse(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "a non-null Kotlin return must NOT warn W237",
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // F28 — multifile-class-facade nullability (the COMMON library case)
+    // -------------------------------------------------------------------------
+
+    // Every published Kotlin library compiles its top-level functions into a MULTIFILE-CLASS
+    // FACADE (@Metadata k=4, e.g. kotlin-stdlib `StringsKt`) whose metadata holds only part-class
+    // NAMES — the function signatures (and their nullability) live in the part classes (k=5). So
+    // decoding the facade's own metadata sees zero functions and W237 silently misses every library
+    // top-level nullable fn = P3 false-negative. The resolver must follow the part-class names and
+    // union their @Metadata. Fixture `MultiFacade` is a real compiled k=4 facade on the test
+    // classpath: `multiMaybeNull():String?` (must warn) + `multiAlwaysPresent():String` (must not).
+    @Test fun `interop CALL on a nullable fn of a multifile-class facade warns W237 (F28)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.MultiFacade" AS MF
+            PROCEDURE Main:
+              LET a = CALL MF.multiMaybeNull
+              DISPLAY a
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "the call resolves; nullability is a warning, not an error. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+        assertTrue(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "expected W237 for a nullable multifile-facade Kotlin return; warnings=${tc.diagnostics.warnings.map { it.code }}",
+        )
+    }
+
+    @Test fun `interop CALL on a non-null fn of a multifile-class facade does not warn W237 (F28)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.MultiFacade" AS MF
+            PROCEDURE Main:
+              LET b = CALL MF.multiAlwaysPresent
+              DISPLAY b
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(tc.diagnostics.hasErrors, "must resolve clean")
+        assertFalse(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "a non-null multifile-facade Kotlin return must NOT warn W237",
+        )
+    }
+
+    // The real-world proof, not just a synthetic fixture: kotlin-stdlib `StringsKt` is itself a
+    // multifile-class facade and `toIntOrNull(): Int?` is nullable. Before F28 this resolved + ran
+    // but never warned — the exact silent-NPE landmine F28 closes. kotlin-stdlib is on the compile
+    // classpath, so this needs no fixture.
+    @Test fun `interop CALL on stdlib StringsKt toIntOrNull (nullable) warns W237 (F28)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "kotlin.text.StringsKt" AS Strings
+            DATA:
+              s : TEXT = "42"
+            PROCEDURE Main:
+              LET n = CALL Strings.toIntOrNull WITH s
+              DISPLAY n
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "the call resolves; nullability is a warning, not an error. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+        assertTrue(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "expected W237 for stdlib StringsKt.toIntOrNull (Int?); warnings=${tc.diagnostics.warnings.map { it.code }}",
+        )
+    }
+
+    // -------------------------------------------------------------------------
+    // #5 — Kotlin/Java property accessors via `obj.field`
+    // -------------------------------------------------------------------------
+
+    // `obj.field` used to type ANY field of a JAVA-OBJECT as TEXT (blind hardcode). It must resolve
+    // the property's getter off the classpath and infer the REAL type — a non-null `String name`
+    // stays TEXT, but a nullable `String? nickname` (getter `getNickname():String?`, erased to plain
+    // String) must warn W237: Kobol has no null, so the value silently NPEs when used (P3).
+    @Test fun `obj field on a nullable Kotlin property warns W237 (#5)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinBean" AS Bean
+            PROCEDURE Main:
+              LET b = NEW Bean WITH "Ada"
+              LET nick = b.nickname
+              DISPLAY nick
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "the property read resolves; nullability is a warning, not an error. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+        assertTrue(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "expected W237 for a nullable Kotlin property read; warnings=${tc.diagnostics.warnings.map { it.code }}",
+        )
+    }
+
+    @Test fun `obj field on a non-null Kotlin property does not warn W237 (#5)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinBean" AS Bean
+            PROCEDURE Main:
+              LET b = NEW Bean WITH "Ada"
+              LET nm = b.name
+              DISPLAY nm
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(tc.diagnostics.hasErrors, "must resolve clean")
+        assertFalse(
+            "W237" in tc.diagnostics.warnings.map { it.code },
+            "a non-null Kotlin property must NOT warn W237",
+        )
+    }
 }

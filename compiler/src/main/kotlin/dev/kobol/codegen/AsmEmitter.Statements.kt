@@ -438,7 +438,7 @@ private fun checkcastReceiver(mv: org.objectweb.asm.MethodVisitor, loadReceiver:
         mv.visitTypeInsn(org.objectweb.asm.Opcodes.CHECKCAST, owner)
 }
 
-private fun AsmEmitter.emitInteropInvoke(
+internal fun AsmEmitter.emitInteropInvoke(
     ctx: MethodContext,
     args: List<dev.kobol.parser.ast.Expression>,
     methodName: String,

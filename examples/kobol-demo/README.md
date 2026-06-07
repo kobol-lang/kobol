@@ -7,6 +7,7 @@ Full-featured example demonstrating Kobol's core capabilities:
 | `db/db-module.kbl` | JDBC (H2), RECORD, VALIDATE multi-constraint, LOG multi-KV, TEXT SENSITIVE |
 | `service/concurrency-module.kbl` | CONCURRENT (virtual threads), LIST, ADD, FOR EACH, PARALLEL FOR EACH |
 | `crypto/crypto-service.kbl` | Java interop (`CALL LocalDate.now`), AES encryption, SHA-256/MD5, Base64 |
+| `interop/kotlin-interop.kbl` | Kotlin interop — `@Metadata` nullable-return warning `W237` (F15) against a real Kotlin dep on the `lib/` classpath |
 | `Main.kbl` | Multi-module imports, CONFIG, REST server, RESPOND WITH body, path params |
 
 ## Prerequisites

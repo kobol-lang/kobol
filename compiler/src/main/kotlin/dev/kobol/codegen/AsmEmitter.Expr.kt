@@ -776,6 +776,32 @@ internal fun AsmEmitter.loadRef(ctx: MethodContext, ref: Reference) {
                         currentType = fieldType
                     }
                 }
+                // #5 (F29): `obj.field` on a JAVA-OBJECT with a known owner reads the property's
+                // getter — lowered through the SAME emitInteropInvoke a `CALL obj.getField` uses
+                // (P1, no fork), so arg-less invoke + return coercion are shared. The receiver is on
+                // the stack erased to Object; emitInteropInvoke CHECKCASTs it to the owner. The
+                // value lands coerced to the property's Kobol representation (e.g. int→long for
+                // INTEGER, double→BigDecimal for DECIMAL — F14 coercion). Opaque owner → break.
+                currentType is KobolType.JavaObjectType -> {
+                    val owner = (currentType as KobolType.JavaObjectType).ownerName
+                        ?.let { dev.kobol.semantic.resolveInteropOwner(it.split("."), importAliasMap) }
+                    val getter = owner?.let {
+                        dev.kobol.semantic.resolvePropertyGetter(classpathResolver, it, field)
+                    }
+                    if (owner != null && getter != null) {
+                        val propType = dev.kobol.semantic.kobolTypeFromDescriptor(
+                            getter.descriptor.substringAfterLast(')')
+                        ) ?: KobolType.JavaObjectType()
+                        val isIface = owner in JVM_INTERFACE_TYPES
+                        emitInteropInvoke(
+                            ctx, emptyList(), getter.name, owner,
+                            if (isIface) INVOKEINTERFACE else INVOKEVIRTUAL, isInterface = isIface,
+                            loadReceiver = { /* receiver already on stack */ },
+                            wantDesc = dev.kobol.semantic.kobolDescriptor(propType),
+                        )
+                        currentType = propType
+                    } else break
+                }
                 else -> break
             }
         }

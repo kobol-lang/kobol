@@ -911,6 +911,18 @@ class TypeChecker(
     private fun checkCall(stmt: CallStatement) {
         stmt.args.forEach { checkExpr(it) }
         stmt.giving?.let { resolveRefType(it) }
+        // F15: the GIVING form captures the return into a variable, so a nullable Kotlin return is
+        // the same NPE landmine as the expression form — warn W237 on every call form (P6), from
+        // the shared resolver (P1). Fire-and-forget (no GIVING) discards the value → no warning.
+        // Resolution is quiet here: a non-interop / reflective / unresolved CALL simply doesn't
+        // warn (the statement path tolerates those forms; codegen handles their dispatch).
+        if (stmt.giving != null) {
+            val resolver = interopResolver ?: return
+            val site = interopCallSite(stmt.method, stmt.args) ?: return
+            (resolver.resolveByArgs(site.owner, site.methodName, site.argDescs)
+                as? ClasspathSymbolResolver.CallResolution.Resolved)
+                ?.let { warnNullableKotlinReturn(stmt.method, it.sig, stmt.pos) }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1028,39 +1040,19 @@ class TypeChecker(
                 error("E031", "CALL expression: named arguments need a known signature; use positional arguments", it.pos)
             checkExpr(it)
         }
-        val parts      = expr.method.split(".")
-        val methodName = parts.last()
-        val ownerParts = parts.dropLast(1)
-
         val resolver = interopResolver
         if (resolver == null) {
             error("E230", "CALL expression '${expr.method}': interop classpath unavailable, cannot resolve return type", expr.pos)
             return KobolType.UnknownType
         }
 
-        // Receiver type for a single-part owner that names a known variable (else null) — mirrors
-        // codegen's receiver detection so static/instance dispatch is decided identically. Symbols
-        // are keyed by the UPPERCASE-normalised name (the owner part keeps original source case).
-        val receiverType: KobolType? = if (ownerParts.size == 1) {
-            when (val sym = symbols.resolve(ownerParts[0].uppercase())) {
-                is Symbol.Variable -> sym.type
-                is Symbol.Constant -> sym.type
-                else -> null
-            }
-        } else null
-
-        val target = resolveInteropTarget(ownerParts, importAliasMap, receiverType)
-        val owner = when (target) {
-            is InteropTarget.Static   -> target.owner
-            is InteropTarget.Instance -> target.owner
-            else -> {
-                error("E231", "CALL expression '${expr.method}' has no resolvable interop owner; the reflective `alias.FIELD.method` form is only valid as a statement", expr.pos)
-                return KobolType.UnknownType
-            }
+        val site = interopCallSite(expr.method, expr.args)
+        if (site == null) {
+            error("E231", "CALL expression '${expr.method}' has no resolvable interop owner; the reflective `alias.FIELD.method` form is only valid as a statement", expr.pos)
+            return KobolType.UnknownType
         }
 
-        val argDescs = expr.args.map { kobolDescriptor(exprTypes[it] ?: inferType(it)) }
-        return when (val res = resolver.resolveByArgs(owner, methodName, argDescs)) {
+        return when (val res = resolver.resolveByArgs(site.owner, site.methodName, site.argDescs)) {
             is ClasspathSymbolResolver.CallResolution.Resolved -> {
                 val retDesc = org.objectweb.asm.Type.getReturnType(res.sig.descriptor).descriptor
                 val kt = kobolTypeFromDescriptor(retDesc)
@@ -1073,7 +1065,10 @@ class TypeChecker(
                         error("E233", "CALL expression '${expr.method}' returns '$retDesc', which has no Kobol type", expr.pos)
                         KobolType.UnknownType
                     }
-                    else -> kt
+                    else -> {
+                        warnNullableKotlinReturn(expr.method, res.sig, expr.pos)
+                        kt
+                    }
                 }
             }
             is ClasspathSymbolResolver.CallResolution.Ambiguous -> {
@@ -1081,14 +1076,55 @@ class TypeChecker(
                 KobolType.UnknownType
             }
             ClasspathSymbolResolver.CallResolution.NoSuchMethod -> {
-                error("E235", "CALL expression '${expr.method}': no method matches these argument types on '$owner'", expr.pos)
+                error("E235", "CALL expression '${expr.method}': no method matches these argument types on '${site.owner}'", expr.pos)
                 KobolType.UnknownType
             }
             ClasspathSymbolResolver.CallResolution.ClassNotFound -> {
-                error("E236", "CALL expression '${expr.method}': class '$owner' not found on the classpath (missing IMPORT?)", expr.pos)
+                error("E236", "CALL expression '${expr.method}': class '${site.owner}' not found on the classpath (missing IMPORT?)", expr.pos)
                 KobolType.UnknownType
             }
         }
+    }
+
+    /**
+     * Resolves a CALL's dotted target string into the JVM owner, method name, and argument
+     * descriptors — the shared front half of interop resolution used by BOTH the CALL-expression
+     * and CALL-statement paths (no fork, P1). Mirrors codegen's receiver detection so static vs
+     * instance dispatch is decided identically. Returns null when the dotted form names no
+     * resolvable interop owner (e.g. the reflective `alias.FIELD.method` statement form).
+     */
+    private fun interopCallSite(method: String, args: List<Expression>): InteropCallSite? {
+        val parts      = method.split(".")
+        val ownerParts = parts.dropLast(1)
+        // Receiver type for a single-part owner that names a known variable (else null). Symbols are
+        // keyed by the UPPERCASE-normalised name (the owner part keeps original source case).
+        val receiverType: KobolType? = if (ownerParts.size == 1) {
+            when (val sym = symbols.resolve(ownerParts[0].uppercase())) {
+                is Symbol.Variable -> sym.type
+                is Symbol.Constant -> sym.type
+                else -> null
+            }
+        } else null
+        val owner = when (val target = resolveInteropTarget(ownerParts, importAliasMap, receiverType)) {
+            is InteropTarget.Static   -> target.owner
+            is InteropTarget.Instance -> target.owner
+            else -> return null
+        }
+        return InteropCallSite(owner, parts.last(), args.map { kobolDescriptor(exprTypes[it] ?: inferType(it)) })
+    }
+
+    /** (jvm owner, method, arg descriptors) for a resolved interop CALL site. */
+    private data class InteropCallSite(val owner: String, val methodName: String, val argDescs: List<String>)
+
+    /**
+     * F15: a Kotlin method declared to return `T?` can hand back null, but Kobol has no null — the
+     * value silently NPEs when later used (type-checks clean otherwise = P3 landmine). Warns W237
+     * on a resolved nullable Kotlin return. Shared by every call form (P6 — expression and
+     * statement-GIVING) from one source (P1). Java/JDK methods carry no @Metadata so never trip.
+     */
+    private fun warnNullableKotlinReturn(method: String, sig: JvmMethodSig, pos: SourcePosition) {
+        if (sig.returnNullable)
+            warning("W237", "CALL '$method' targets a Kotlin method whose return type is nullable, but Kobol has no null — the result may be null and cause a NullPointerException when used; guard the source or call a non-null alternative", pos)
     }
 
     private fun inferBuiltinType(expr: BuiltinCall): KobolType {
@@ -1250,9 +1286,13 @@ class TypeChecker(
             error("E001", "Undefined name '${rootName}'${if (suggestion != null) " — $suggestion" else ""}", ref.pos)
             return KobolType.UnknownType
         }
-        return walkFieldChain(rootSymbolType(sym), ref.parts.drop(1)) { msg ->
-            error("E002", msg, ref.pos)
-        }
+        return walkFieldChain(
+            rootSymbolType(sym), ref.parts.drop(1),
+            onError = { msg -> error("E002", msg, ref.pos) },
+            onNullableProperty = { field ->
+                warning("W237", "property '$field' is a Kotlin property whose type is nullable, but Kobol has no null — the value may be null and cause a NullPointerException when used; guard the source", ref.pos)
+            },
+        )
     }
 
     /**
@@ -1264,7 +1304,7 @@ class TypeChecker(
      */
     fun typeOfReference(ref: Reference): KobolType {
         val sym = symbols.resolve(ref.parts[0]) ?: return KobolType.UnknownType
-        return walkFieldChain(rootSymbolType(sym), ref.parts.drop(1)) { /* silent */ }
+        return walkFieldChain(rootSymbolType(sym), ref.parts.drop(1), onError = { /* silent */ })
     }
 
     /** Static type a root symbol contributes before any field access. */
@@ -1287,6 +1327,7 @@ class TypeChecker(
         start: KobolType,
         fields: List<String>,
         onError: (String) -> Unit,
+        onNullableProperty: (String) -> Unit = {},
     ): KobolType {
         var type = start
         for (field in fields) {
@@ -1300,7 +1341,22 @@ class TypeChecker(
                 is KobolType.ListType ->
                     if (field == "LENGTH" || field == "SIZE" || field == "COUNT") KobolType.IntegerType
                     else { onError("LIST has no field '$field'"); KobolType.UnknownType }
-                is KobolType.JavaObjectType -> KobolType.TextType(null)  // e.g. err.message
+                // #5 (F29): `obj.field` on a JAVA-OBJECT with a known owner resolves to its property
+                // getter (off the compile classpath, via the SAME helper codegen emits — P1) so the
+                // real property type flows into the type system and a nullable property warns W237.
+                // An opaque owner (null) keeps the historical permissive TEXT fallback (e.g. a field
+                // on a JAVA-OBJECT whose concrete class was erased across a boundary).
+                is KobolType.JavaObjectType -> {
+                    val getter = type.ownerName?.let { owner ->
+                        interopResolver?.let { r ->
+                            resolvePropertyGetter(r, resolveInteropOwner(owner.split("."), importAliasMap), field)
+                        }
+                    }
+                    if (getter != null) {
+                        if (getter.returnNullable) onNullableProperty(field)
+                        kobolTypeFromDescriptor(getter.descriptor.substringAfterLast(')')) ?: KobolType.JavaObjectType()
+                    } else KobolType.TextType(null)
+                }
                 else -> { onError("Cannot access field '$field' on type $type"); KobolType.UnknownType }
             }
         }

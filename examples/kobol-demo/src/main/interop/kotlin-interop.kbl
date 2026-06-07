@@ -1,0 +1,45 @@
+PROGRAM kotlin-interop
+  VERSION "1.0.0"
+
+MODULE demo.interop:
+  EXPORT PROCEDURE RunKotlinInterop
+END-MODULE
+
+NOTE:
+  F15 end-to-end proof — interop CALL to a REAL Kotlin dependency resolved off
+  the project's lib/ classpath (lib/kobol-testfixture.jar).
+
+  Kotlin nullability lives only in @Metadata; it erases away in the JVM
+  signature. `maybeNull()` returns `String?` (nullable) and `alwaysPresent()`
+  returns `String` (non-null) — IDENTICAL erased descriptor `()Ljava/lang/String;`.
+  Kobol has no null, so a nullable result silently NPEs when used; type-checks
+  clean = a P3 landmine.
+
+  The compiler decodes @Metadata at the CALL site and MUST warn W237 on the
+  nullable call, and MUST NOT warn on the non-null one. This proves the W237
+  path fires in a real `kobol build` against a Kotlin jar wired onto the
+  project compile classpath (interopClasspath, F27) — not just a unit-test
+  fixture on the test classpath.
+
+  NOTE: top-level functions of most published Kotlin libraries compile to a
+  MULTIFILE-CLASS facade (e.g. kotlin-stdlib `StringsKt`), whose @Metadata holds
+  only part-class names, so W237 currently does NOT see their nullability —
+  logged as a separate finding. This fixture is a single-FILE facade, the case
+  W237 already handles.
+END-NOTE
+
+IMPORT "dev.kobol.testfixture.KotlinNullableApiKt" AS KN
+
+DATA:
+  maybe   : TEXT     -- maybeNull()     -> String?  : nullable -> W237
+  present : TEXT     -- alwaysPresent() -> String   : non-null -> no warn
+
+EXPORT PROCEDURE RunKotlinInterop:
+  -- nullable return (String?) — expect W237 here (the landmine)
+  CALL KN.maybeNull GIVING maybe
+  DISPLAY "maybe=" maybe
+
+  -- non-null return (String) — expect NO W237 here (no false positive)
+  CALL KN.alwaysPresent GIVING present
+  DISPLAY "present=" present
+END-PROCEDURE

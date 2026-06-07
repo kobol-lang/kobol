@@ -181,3 +181,36 @@ fun resolveInteropTarget(
     val lowPath = ownerParts.joinToString("/") { it.lowercase() }
     return InteropTarget.Static(STDLIB_OWNERS[lowPath] ?: ownerParts.joinToString("/"))
 }
+
+/**
+ * Resolve a property read `obj.field` on [ownerInternalName] (slashed) to its no-arg getter method,
+ * via the classpath [resolver] (challenge **#5 / F29**). A Kotlin property `val/var foo: T` compiles
+ * to a getter `getFoo()T`; a property already named `isX` (typically `Boolean`) keeps its name
+ * (`isX()`); a Java bean exposes the same `getX()/isX()` shape. Candidates, in order: `get<Field>`,
+ * `is<Field>`, then the field verbatim (covers an already-accessor-named or `@JvmName`-renamed
+ * getter). Returns the resolved public, non-static, no-arg getter [JvmMethodSig] — carrying its
+ * `@Metadata` return nullability for W237 — or null when none resolves (caller keeps its opaque
+ * fallback). Reads bytes only, no class load (P1); shared by the type checker and codegen so the
+ * inferred property type can never disagree with the emitted getter call (P1, kills the F14-class
+ * landmine for `obj.field` too).
+ *
+ * Match is **case-insensitive**: a Kobol [field] arrives upper-cased (the lexer normalises
+ * identifiers, so `obj.nickname` reaches here as `NICKNAME`) while a JVM getter is camelCase
+ * (`getNickname`). The resolved sig carries the getter's REAL name for the caller to invoke.
+ */
+fun resolvePropertyGetter(
+    resolver: ClasspathSymbolResolver,
+    ownerInternalName: String,
+    field: String,
+): JvmMethodSig? {
+    val methods = resolver.methodsOf(ownerInternalName) ?: return null
+    for (candidate in listOf("get$field", "is$field", field)) {
+        val getter = methods.firstOrNull {
+            it.isPublic && !it.isStatic &&
+                it.descriptor.startsWith("()") &&          // no-arg getter
+                it.name.equals(candidate, ignoreCase = true)
+        }
+        if (getter != null) return getter
+    }
+    return null
+}
