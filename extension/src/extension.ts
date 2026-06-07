@@ -9,8 +9,9 @@ import {
     ServerOptions,
     TransportKind,
 } from 'vscode-languageclient/node';
+import { KOBOL_VERSION } from './version';   // single-sourced from gradle.properties
 
-const KOBOL_VERSION = '0.1.0';
+
 const GITHUB_RELEASE_BASE =
     `https://github.com/kobol-lang/kobol/releases/download/v${KOBOL_VERSION}`;
 

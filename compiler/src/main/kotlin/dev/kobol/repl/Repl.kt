@@ -1,5 +1,6 @@
 package dev.kobol.repl
 
+import dev.kobol.VERSION
 import dev.kobol.codegen.AsmEmitter
 import dev.kobol.lexer.LexException
 import dev.kobol.lexer.Lexer
@@ -363,12 +364,18 @@ class Repl {
     // -------------------------------------------------------------------------
 
     private fun printBanner() {
-        println("""
-            ┌─────────────────────────────────────────────────┐
-            │  Kobol REPL 0.1.0-dev                           │
-            │  Type :help for commands, :quit to exit         │
-            └─────────────────────────────────────────────────┘
-        """.trimIndent())
+        val top = "┌─────────────────────────────────────────────────┐"
+        val bot = "└─────────────────────────────────────────────────┘"
+        val inner = top.length - 2                        // cell width between the corners
+        fun row(s: String) = "│" + "  $s".padEnd(inner) + "│"
+        println(
+            listOf(
+                top,
+                row("Kobol REPL $VERSION"),               // single-sourced version
+                row("Type :help for commands, :quit to exit"),
+                bot,
+            ).joinToString("\n")
+        )
     }
 
     private fun printHelp() {

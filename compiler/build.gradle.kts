@@ -34,9 +34,37 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// ---------------------------------------------------------------------------
+// Version single-sourcing — generate dev.kobol.KobolVersion from the Gradle
+// version (root gradle.properties: kobolVersion). No hand-edited version literal
+// in source; dev.kobol.VERSION reads this generated const.
+// ---------------------------------------------------------------------------
+val generatedVersionDir = layout.buildDirectory.dir("generated/version/kotlin")
+val generateVersion by tasks.registering {
+    val versionValue = project.version.toString()
+    val outDir = generatedVersionDir
+    inputs.property("version", versionValue)
+    outputs.dir(outDir)
+    doLast {
+        val pkg = outDir.get().dir("dev/kobol").asFile
+        pkg.mkdirs()
+        pkg.resolve("KobolVersion.kt").writeText(
+            """
+            package dev.kobol
+
+            // GENERATED — do not edit. Single source: root gradle.properties (kobolVersion).
+            internal const val KOBOL_VERSION: String = "$versionValue"
+            """.trimIndent() + "\n"
+        )
+    }
+}
+
 kotlin {
     jvmToolchain(21)
+    sourceSets["main"].kotlin.srcDir(generatedVersionDir)
 }
+
+tasks.named("compileKotlin") { dependsOn(generateVersion) }
 
 tasks.jar {
     archiveFileName.set("kobolc.jar")

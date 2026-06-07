@@ -15,7 +15,8 @@ import java.io.File
 import java.nio.file.FileSystems
 import java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY
 
-const val VERSION = "0.1.0-dev"
+// Single source: root gradle.properties (kobolVersion) → generated KobolVersion.kt.
+const val VERSION = KOBOL_VERSION
 
 fun main(args: Array<String>) {
     if (args.isEmpty()) { Repl().run(); return }

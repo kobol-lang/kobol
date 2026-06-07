@@ -4,8 +4,8 @@ plugins {
     alias(libs.plugins.plugin.publish)
 }
 
-group   = "dev.kobol"
-version = "0.1.0-dev"
+group = "dev.kobol"
+// version inherited from root allprojects { } — single source: gradle.properties (kobolVersion)
 
 gradlePlugin {
     website = "https://github.com/mrtinkz/kobol"
