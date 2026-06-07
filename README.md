@@ -174,6 +174,11 @@ program automatically (see the Quick Syntax Preview above) — no boilerplate ne
 
 See the [**Kobol** Language Specification](docs/LANGUAGE_SPEC.md) for the full language reference.
 
-## License
+## Licensing
 
-Licensed under the [Apache License 2.0](LICENSE).
+**Kobol** is made available under two licenses:
+
+- [Apache License 2.0](LICENSE)
+- [Eclipse Public License 2.0](LICENSE-EPL-2.0.txt)
+
+Both license texts are included in this repository. Choose the license that best fits your use.
