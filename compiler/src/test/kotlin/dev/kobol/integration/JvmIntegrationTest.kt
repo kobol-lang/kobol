@@ -1795,4 +1795,87 @@ class JvmIntegrationTest {
         assertTrue("doubled=18" in out, "(max(5,9)) * 2 should be 18; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
+
+    // -------------------------------------------------------------------------
+    // v2 foundation miscompiles — builtin call-boundary / field-init codegen.
+    // Each previously type-checked clean then died with a VerifyError at class
+    // load; these load+run the bytecode, which is what catches the regression.
+    // -------------------------------------------------------------------------
+
+    @Test fun `POWER builtin computes a decimal result (v5)`() {
+        // POWER is typed DECIMAL; codegen now routes it through the BigDecimal
+        // helper (not the int power(JJ)J overload that mismatched the operands).
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              raised : DECIMAL(12,4)
+            PROCEDURE Main:
+              COMPUTE raised = POWER(2, 8)
+              DISPLAY "raised={raised}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("raised=256" in out, "POWER(2,8) should be 256; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `SIGN of a decimal yields an INTEGER (v8)`() {
+        // SIGN returns a Kobol INTEGER (JVM long); the result drops into a long
+        // slot without the int-to-long widening gap that crashed at load.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              neg-val : DECIMAL(10,2) = -8.50
+              s : INTEGER
+            PROCEDURE Main:
+              COMPUTE s = SIGN(neg-val)
+              DISPLAY "s={s}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("s=-1" in out, "SIGN(-8.50) should be -1; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `MATCH range pattern over MONEY (v3)`() {
+        // Decimal/Money range bounds compare with BigDecimal.compareTo, not the
+        // String.compareTo path that crashed on the language's flagship type.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              amount : MONEY = 5000.00
+              bucket : TEXT
+            PROCEDURE Main:
+              MATCH amount:
+                WHEN 0.01 .. 999.99:
+                  MOVE "SMALL" TO bucket
+                WHEN 1000.00 .. 9999.99:
+                  MOVE "MEDIUM" TO bucket
+                OTHERWISE:
+                  MOVE "LARGE" TO bucket
+              END-MATCH
+              DISPLAY "bucket={bucket}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("bucket=MEDIUM" in out, "5000.00 falls in 1000..9999.99; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `bare nullary builtin as a DATE field initializer (v1)`() {
+        // The spec's documented form `d : DATE = TODAY` (no parens). A bare nullary
+        // builtin lowers to the builtin call, yielding a LocalDate — not a phantom
+        // Object-typed field load that the verifier rejected in <clinit>.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a-date : DATE = TODAY
+            PROCEDURE Main:
+              DISPLAY "date-set={a-date}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("date-set=" in out, "bare TODAY initializer must run; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
 }

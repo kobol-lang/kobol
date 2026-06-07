@@ -518,6 +518,22 @@ internal fun AsmEmitter.emitMatch(ctx: MethodContext, stmt: MatchStatement) {
                         mv.visitInsn(LCMP)
                         mv.visitJumpInsn(IFGT, lNext)
                     }
+                    // #v3: DECIMAL/MONEY subject — the subject is a BigDecimal, so compare the
+                    // bounds with BigDecimal.compareTo, NOT String.compareTo (the old `else` path
+                    // emitted String.compareTo on a BigDecimal → VerifyError at load on the
+                    // language's flagship MONEY type). Bounds are widened so an INTEGER literal
+                    // bound (`WHEN 1000 .. 9999.99`) coerces to BigDecimal first. Mirrors the
+                    // integer path: jump to lNext when from > subj or subj > to (out of range).
+                    is KobolType.DecimalType, is KobolType.MoneyType -> {
+                        emitDecimalArg(ctx, pattern.from)
+                        loadLocal(mv, subjType, subjSlot)
+                        mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false)
+                        mv.visitJumpInsn(IFGT, lNext)
+                        loadLocal(mv, subjType, subjSlot)
+                        emitDecimalArg(ctx, pattern.to)
+                        mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false)
+                        mv.visitJumpInsn(IFGT, lNext)
+                    }
                     else -> {
                         emitExpr(ctx, pattern.from)
                         loadLocal(mv, subjType, subjSlot)

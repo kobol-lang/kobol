@@ -65,9 +65,11 @@ class KobolMathTest {
 
     // ── sign ─────────────────────────────────────────────────────────────
 
-    @Test fun `sign of positive`()       = assertEquals(1,  KobolMath.sign(7L))
-    @Test fun `sign of zero`()           = assertEquals(0,  KobolMath.sign(0L))
-    @Test fun `sign of negative`()       = assertEquals(-1, KobolMath.sign(-3L))
+    // SIGN returns Long — Kobol INTEGER is a JVM long (#v8).
+    @Test fun `sign of positive`()       = assertEquals(1L,  KobolMath.sign(7L))
+    @Test fun `sign of zero`()           = assertEquals(0L,  KobolMath.sign(0L))
+    @Test fun `sign of negative`()       = assertEquals(-1L, KobolMath.sign(-3L))
+    @Test fun `sign of decimal`()        = assertEquals(-1L, KobolMath.sign(bd("-8.50")))
 
     // ── Phase 14: Long-scale overloads ──────────────────────────────────────
 

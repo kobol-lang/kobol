@@ -255,6 +255,18 @@ internal fun AsmEmitter.emitDecimalArg(ctx: MethodContext, arg: Expression) {
     coerceToDecimalIfNeeded(ctx.mv, inferExprType(arg))
 }
 
+/**
+ * Emit BigDecimal exponentiation. Stack before: ..., base: BigDecimal, exp: BigDecimal.
+ * Narrows the exponent to an int with intValueExact() (BigDecimal.pow takes an int exponent;
+ * a fractional/oversized exponent THROWS rather than silently flooring — decimal exactness,
+ * priority 4), then calls KobolMath.power(BigDecimal, int). Stack after: ..., result: BigDecimal.
+ * Shared by the `**` operator and the POWER builtin (#v5) so both lower identically (P6).
+ */
+internal fun AsmEmitter.emitDecimalPow(mv: MethodVisitor) {
+    mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "intValueExact", "()I", false)
+    mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "power", "(L$BIGDECIMAL;I)L$BIGDECIMAL;", false)
+}
+
 /** True when the type is a JVM reference (occupies one slot, compared with `.equals`, not LCMP). */
 internal fun isJvmReference(type: KobolType): Boolean = when (type) {
     is KobolType.IntegerType, is KobolType.SmallIntType, is KobolType.BooleanType, is KobolType.VoidType -> false
@@ -293,8 +305,8 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
                     // rather than silently flooring or floating it (#10, priority: never
                     // lose decimal exactness). Previously this fell to `else` and emitted
                     // nothing → the result was silently the wrong operand.
-                    mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "intValueExact", "()I", false)
-                    mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "power", "(L$BIGDECIMAL;I)L$BIGDECIMAL;", false)
+                    // Shared with the POWER builtin (#v5) via emitDecimalPow — one lowering, P6.
+                    emitDecimalPow(mv)
                 }
                 else -> { /* default */ }
             }
@@ -558,10 +570,12 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
                     "CEIL"     -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "ceil",  "($BD)$BD", false) }
                     "SQRT"     -> { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sqrt",  "($BD)$BD", false) }
                     "SIGN" -> {
+                        // #v8: SIGN is typed INTEGER (JVM long); KobolMath.sign now returns `long`
+                        // (J), so the result drops straight into a long slot — no I2L, no verifier
+                        // mismatch. The decimal arg is widened (emitDecimalArg) so SMALLINT also works.
                         val t = inferExprType(args[0])
-                        emitExpr(ctx, args[0])
-                        if (t is KobolType.IntegerType) mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sign", "(J)I", false)
-                        else                            mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sign", "($BD)I", false)
+                        if (t is KobolType.IntegerType) { emitExpr(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sign", "(J)J", false) }
+                        else                            { emitDecimalArg(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "sign", "($BD)J", false) }
                     }
                     "MAX", "MIN" -> {
                         val t = inferExprType(args[0])
@@ -577,8 +591,16 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
                         else                            mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "mod", "($BD$BD)$BD", false)
                     }
                     "POWER" -> {
-                        args.forEach { emitExpr(ctx, it) }
-                        mv.visitMethodInsn(INVOKESTATIC, MATH_OWN, "power", "(JJ)J", false)
+                        // #v5: POWER is typed DECIMAL by the checker, so route it through the SAME
+                        // BigDecimal helper the `**` operator uses (emitDecimalPow) instead of the
+                        // integer `power(JJ)J` overload — the old descriptor mismatched the
+                        // BigDecimal operands the checker promised (VerifyError at load on every
+                        // argument form). Both args are widened to BigDecimal; the exponent is then
+                        // narrowed with intValueExact (throws on a fractional/oversized exponent
+                        // rather than silently flooring — decimal exactness, priority 4).
+                        emitDecimalArg(ctx, args[0])
+                        emitDecimalArg(ctx, args[1])
+                        emitDecimalPow(mv)
                     }
                     "IS-POSITIVE", "IS-NEGATIVE", "IS-ZERO" -> {
                         val t = inferExprType(args[0])
@@ -750,6 +772,18 @@ internal fun AsmEmitter.loadRef(ctx: MethodContext, ref: Reference) {
             val caseEntry = variantCaseIndex[name.uppercase()]
             if (caseEntry != null && caseEntry.second.fields.isEmpty()) {
                 emitVariantConstruction(ctx, caseEntry.first, caseEntry.second, emptyList())
+                return
+            }
+            // #v1: a bare nullary builtin (`TODAY`, `NOW`, `UUID-GENERATE`, `UUID-NIL`) — the
+            // spec's documented field-init form (`started : DATE = TODAY`). Lower it to the
+            // builtin call so it yields the typed value (LocalDate/UUID/…) the field expects,
+            // instead of a phantom GETSTATIC of an Object-typed field that the verifier rejects
+            // at class load. Shadowed by a real local/field/constant of the same name (checked
+            // above and in resolveSymbolType). The matching type is supplied by the checker's
+            // resolveRefType, kept in lock-step via NULLARY_BUILTINS.
+            if (name.uppercase() in dev.kobol.semantic.NULLARY_BUILTINS &&
+                checker.symbols.resolve(name) == null) {
+                emitBuiltin(ctx, BuiltinCall(name.uppercase(), emptyList(), ref.pos))
                 return
             }
         }

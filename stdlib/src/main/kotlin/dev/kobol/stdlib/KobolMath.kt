@@ -91,8 +91,11 @@ object KobolMath {
 
     // ── Sign ──────────────────────────────────────────────────────────────
 
-    @JvmStatic fun sign(n: Long): Int       = n.compareTo(0L)
-    @JvmStatic fun sign(n: BigDecimal): Int = n.signum()
+    // Kobol INTEGER is a JVM `long`, so SIGN returns Long (not Int) — the result is
+    // stored directly into an INTEGER slot with no widening (#v8: the Int overload
+    // produced an `int` that the verifier rejected in a `long_2nd` slot).
+    @JvmStatic fun sign(n: Long): Long       = n.compareTo(0L).toLong()
+    @JvmStatic fun sign(n: BigDecimal): Long = n.signum().toLong()
 
     // ── Rounding — Long-scale overloads (Kobol INTEGER is JVM long) ──────
 

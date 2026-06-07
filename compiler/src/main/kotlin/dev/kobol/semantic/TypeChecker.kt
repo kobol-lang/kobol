@@ -7,6 +7,15 @@ import dev.kobol.parser.ast.*
 import java.util.IdentityHashMap
 
 /**
+ * Zero-argument builtins that may be written bare (no parentheses), as the spec shows
+ * (`started : DATE = TODAY`, §6). A bare name like `TODAY` parses as a [Reference], so both
+ * the type checker (resolveRefType) and the codegen (loadRef) recognise this set and treat it
+ * as the corresponding builtin call — shared here so the two stay in lock-step (#v1). Names are
+ * compared UPPERCASE. A real local/field/constant of the same name shadows the builtin.
+ */
+internal val NULLARY_BUILTINS = setOf("TODAY", "NOW", "UUID-GENERATE", "UUID-NIL")
+
+/**
  * Semantic analyser.
  *
  * Walks the AST in a single pass and:
@@ -263,9 +272,9 @@ class TypeChecker(
             // is flagged at W237, there is no unwarned null source.)
             if (item.initializer == null) {
                 val hint: Pair<String, String>? = when (kType) {
-                    is KobolType.DateType       -> "DATE" to "${item.name} : DATE = TODAY"
-                    is KobolType.TimeType       -> "TIME" to "${item.name} : TIME = NOW"
-                    is KobolType.DateTimeType   -> "DATETIME" to "${item.name} : DATETIME = NOW"
+                    is KobolType.DateType       -> "DATE" to "${item.name} : DATE = TODAY()"
+                    is KobolType.TimeType       -> "TIME" to "${item.name} : TIME = NOW()"
+                    is KobolType.DateTimeType   -> "DATETIME" to "${item.name} : DATETIME = NOW()"
                     is KobolType.JavaObjectType -> "JAVA-OBJECT" to
                         "${item.name} : ${kType.ownerName ?: "Type"} = NEW ${kType.ownerName ?: "Type"}"
                     else -> null
@@ -1304,6 +1313,11 @@ class TypeChecker(
                 val caseEntry = variantCaseIndex[rootName.uppercase()]
                 if (caseEntry != null && caseEntry.second.fields.isEmpty())
                     return KobolType.VariantRefType(caseEntry.first)
+                // #v1: a bare nullary builtin (`TODAY`, `NOW`, …) is the spec's documented form
+                // (`started : DATE = TODAY`). Type it as the builtin's return type — codegen
+                // (loadRef) lowers the same bare reference to the builtin call.
+                if (rootName.uppercase() in NULLARY_BUILTINS)
+                    return inferBuiltinType(BuiltinCall(rootName.uppercase(), emptyList(), ref.pos))
             }
             val suggestion = didYouMean(rootName, symbols.allVisibleNames())
             error("E001", "Undefined name '${rootName}'${if (suggestion != null) " — $suggestion" else ""}", ref.pos)
