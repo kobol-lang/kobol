@@ -1077,4 +1077,61 @@ class ParserTest {
         assertIs<DivideStatement>(div)
         assertEquals(listOf("TOTAL"), div.into.parts)
     }
+
+    // -------------------------------------------------------------------------
+    // F20 — async surface: the IMPLEMENTED form is `PERFORM … GIVING fut` +
+    // `AWAIT fut INTO r`. The old §18.4 prose showed `ASYNC DO …` + `AWAIT …
+    // GIVING` — neither parses. These tests lock the real surface and prove the
+    // drifted forms are rejected, so the spec was corrected to match (not the
+    // parser extended with a second, redundant way to launch async).
+    // -------------------------------------------------------------------------
+
+    @Test fun `async PERFORM GIVING then AWAIT INTO parses (real async surface, F20)`() {
+        val p = parse("""
+            PROGRAM T
+            DATA:
+              fut : FUTURE OF INTEGER
+              r   : INTEGER
+            ASYNC PROCEDURE Fetch RETURNING INTEGER:
+              RETURN 42
+            END-PROCEDURE
+            PROCEDURE Main:
+              PERFORM Fetch GIVING fut
+              AWAIT fut INTO r
+            END-PROCEDURE
+        """.trimIndent())
+        val body = p.procedures.first { it.name == "MAIN" }.body
+        val perform = body[0]
+        assertIs<PerformStatement>(perform)
+        assertEquals(listOf("FUT"), perform.giving?.parts)
+        val await = body[1]
+        assertIs<AwaitStatement>(await)
+        assertEquals(listOf("FUT"), await.future.parts)
+        assertEquals(listOf("R"), await.into.parts)
+    }
+
+    @Test fun `the drifted ASYNC DO launch form does not parse (F20)`() {
+        assertThrows<ParseException> {
+            parse("""
+                PROGRAM T
+                PROCEDURE Main:
+                  LET task = ASYNC DO Fetch USING "EUR"
+                END-PROCEDURE
+            """.trimIndent())
+        }
+    }
+
+    @Test fun `the drifted AWAIT GIVING form does not parse (F20)`() {
+        assertThrows<ParseException> {
+            parse("""
+                PROGRAM T
+                DATA:
+                  task : FUTURE OF INTEGER
+                  rate : INTEGER
+                PROCEDURE Main:
+                  AWAIT task GIVING rate
+                END-PROCEDURE
+            """.trimIndent())
+        }
+    }
 }

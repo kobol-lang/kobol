@@ -593,6 +593,10 @@ class JavaTranspiler(
         // resolve IMPORT aliases / stdlib paths to FQNs the way the ASM path does, so the alias
         // form won't compile as Java. Folded into F11 (port properly if the backend is revived).
         is NewExpr -> "new ${expr.owner}(${expr.args.joinToString(", ") { emitExpr(it) }})"
+
+        // CALL in expression position (F14): emit the same `owner.method(args)` Java the CALL
+        // statement emits — the dotted owner is a Java static class or an instance variable either way.
+        is CallExpr -> "${expr.method}(${expr.args.joinToString(", ") { emitExpr(it) }})"
     }
 
     /**

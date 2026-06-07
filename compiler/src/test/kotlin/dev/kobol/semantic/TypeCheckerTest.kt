@@ -680,4 +680,34 @@ class TypeCheckerTest {
         """.trimIndent())
         assertFalse(tc.diagnostics.warnings.any { it.code == "W008" })
     }
+
+    // ─── F14 — CALL in expression position infers the real return type (E2) ───────────
+
+    @Test fun `CALL expression with a real return type-checks clean`() {
+        // Math.max(long,long) → long; LET n infers INTEGER from the real descriptor, no annotation.
+        expectClean("""
+            PROGRAM T
+            DATA:
+              a : INTEGER = 1
+              b : INTEGER = 2
+            PROCEDURE Main:
+              LET n = CALL Math.max WITH a, b
+              DISPLAY "{n}"
+            END-PROCEDURE
+        """.trimIndent())
+    }
+
+    @Test fun `CALL expression on a void method is rejected at compile time, not at run`() {
+        // System.gc() returns void — it has no value. Using it in expression position must be a
+        // compile error (E232), NOT a clean type-check that crashes when loaded (P3 landmine).
+        expectErrors("""
+            PROGRAM T
+            DATA:
+              x : INTEGER = 0
+            PROCEDURE Main:
+              COMPUTE x = CALL System.gc
+              DISPLAY "{x}"
+            END-PROCEDURE
+        """.trimIndent(), "E232")
+    }
 }

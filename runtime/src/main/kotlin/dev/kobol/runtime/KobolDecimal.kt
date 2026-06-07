@@ -70,4 +70,19 @@ object KobolDecimal {
 
     fun toDisplayString(value: BigDecimal, scale: Int): String =
         value.setScale(scale, DEFAULT_ROUNDING).toPlainString()
+
+    /**
+     * Render [value] for DISPLAY / string interpolation at its field's declared [scale] (F18).
+     * Zero-pads when the value carries fewer fraction digits than declared — a `DECIMAL(18,8)`
+     * holding `0` or `1.5` shows `0.00000000` / `1.50000000`, matching the declared precision.
+     *
+     * Pad-only: a value that already carries MORE fraction digits than declared is shown in
+     * full (never rounded), so DISPLAY can never hide stored precision (priority 4). Because
+     * the scale only ever increases here, the no-rounding-mode [BigDecimal.setScale] is exact
+     * and cannot throw. Display-only — the stored BigDecimal is untouched. [toPlainString] keeps
+     * the output out of scientific notation.
+     */
+    @JvmStatic
+    fun toDisplayPadded(value: BigDecimal, scale: Int): String =
+        (if (value.scale() < scale) value.setScale(scale) else value).toPlainString()
 }

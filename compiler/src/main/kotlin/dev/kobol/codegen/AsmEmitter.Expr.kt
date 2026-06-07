@@ -158,6 +158,8 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
                 mv.visitMethodInsn(INVOKESPECIAL, owner, "<init>", "($argDesc)V", false)
             }
 
+            is CallExpr -> emitCallExpr(ctx, expr)
+
             is NamedArgument -> emitExpr(ctx, expr.value)
 
             is PipelineExpr -> emitPipeline(ctx, expr)

@@ -50,14 +50,21 @@ class ClasspathSymbolResolver(classpath: List<String>) {
     // owner internal name (slashed) → its methods, or null when the class is unreadable.
     private val cache = HashMap<String, List<JvmMethodSig>?>()
 
+    // owner internal name → (superName?, interfaceNames), or null when unreadable. Cached (P5).
+    private val hierarchy = HashMap<String, Pair<String?, List<String>>?>()
+
+    /** Raw `.class` bytes for [owner] (slashed), or null if unreadable. Shared byte fetch (P1). */
+    private fun classBytes(owner: String): ByteArray? =
+        (loader.getResourceAsStream("$owner.class")
+            ?: ClassLoader.getSystemResourceAsStream("$owner.class"))
+            ?.use { it.readBytes() }
+
     /** All methods of [ownerInternalName] (slashed, e.g. `java/lang/System`), or null if unreadable. */
     fun methodsOf(ownerInternalName: String): List<JvmMethodSig>? =
         cache.getOrPut(ownerInternalName) { readMethods(ownerInternalName) }
 
     private fun readMethods(owner: String): List<JvmMethodSig>? {
-        val bytes = (loader.getResourceAsStream("$owner.class")
-            ?: ClassLoader.getSystemResourceAsStream("$owner.class"))
-            ?.use { it.readBytes() } ?: return null
+        val bytes = classBytes(owner) ?: return null
         val sigs = ArrayList<JvmMethodSig>()
         ClassReader(bytes).accept(object : ClassVisitor(Opcodes.ASM9) {
             override fun visitMethod(
@@ -82,6 +89,44 @@ class ClasspathSymbolResolver(classpath: List<String>) {
             }
         }, ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
         return sigs
+    }
+
+    /** [owner]'s direct superclass + interfaces (slashed names), or null when unreadable. */
+    private fun superAndInterfaces(owner: String): Pair<String?, List<String>>? =
+        hierarchy.getOrPut(owner) {
+            val bytes = classBytes(owner) ?: return@getOrPut null
+            var result: Pair<String?, List<String>> = null to emptyList()
+            ClassReader(bytes).accept(object : ClassVisitor(Opcodes.ASM9) {
+                override fun visit(
+                    version: Int, access: Int, name: String, signature: String?,
+                    superName: String?, interfaces: Array<out String>?,
+                ) {
+                    result = superName to (interfaces?.toList() ?: emptyList())
+                }
+            }, ClassReader.SKIP_CODE or ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
+            result
+        }
+
+    /**
+     * Is [sub] assignable to [sup] by Java reference widening (an upcast)? Walks the class hierarchy
+     * (superclass + interfaces, transitively) off the same cached classpath bytes — no class loading.
+     * `java/lang/Object` is every reference's supertype. Used by [JvmCoercion.cost] to reject an
+     * unrelated argument cross-cast (**F25**). Both names are internal (slashed); a class whose bytes
+     * are unreadable contributes no further edges (conservative → not a subtype).
+     */
+    fun isSubtype(sub: String, sup: String): Boolean {
+        if (sub == sup || sup == "java/lang/Object") return true
+        val seen = HashSet<String>()
+        val queue = ArrayDeque<String>().apply { add(sub) }
+        while (queue.isNotEmpty()) {
+            val cur = queue.removeFirst()
+            if (cur == sup) return true
+            if (!seen.add(cur)) continue
+            val (superName, interfaces) = superAndInterfaces(cur) ?: continue
+            superName?.let { queue.add(it) }
+            queue.addAll(interfaces)
+        }
+        return false
     }
 
     /**
@@ -135,7 +180,7 @@ class ClasspathSymbolResolver(classpath: List<String>) {
             var total = 0
             var ok = true
             for (i in 0 until arity) {
-                val c = JvmCoercion.cost(argDescs[i], params[i].descriptor)
+                val c = JvmCoercion.cost(argDescs[i], params[i].descriptor, ::isSubtype)
                 if (c == null) { ok = false; break }
                 total += c
             }
@@ -159,12 +204,12 @@ class ClasspathSymbolResolver(classpath: List<String>) {
             var total = VARARGS_PENALTY
             var ok = true
             for (i in 0 until fixedCount) {
-                val c = JvmCoercion.cost(argDescs[i], params[i].descriptor)
+                val c = JvmCoercion.cost(argDescs[i], params[i].descriptor, ::isSubtype)
                 if (c == null) { ok = false; break }
                 total += c
             }
             if (ok) for (j in fixedCount until arity) {
-                val c = JvmCoercion.cost(argDescs[j], elemDesc)
+                val c = JvmCoercion.cost(argDescs[j], elemDesc, ::isSubtype)
                 if (c == null) { ok = false; break }
                 total += c
             }

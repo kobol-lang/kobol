@@ -788,27 +788,9 @@ class AsmEmitter(
         }
     }
 
-    // WITH PRECISION — push MathContext, run body, pop in finally
-    internal fun jvmDescriptor(type: KobolType): String = when (type) {
-        is KobolType.IntegerType    -> "J"
-        is KobolType.SmallIntType   -> "I"
-        is KobolType.BooleanType    -> "Z"
-        is KobolType.TextType       -> "Ljava/lang/String;"
-        is KobolType.DecimalType,
-        is KobolType.MoneyType      -> "L$BIGDECIMAL;"
-        is KobolType.DateType       -> "L$LOCALDATE;"
-        is KobolType.TimeType       -> "L$LOCALTIME;"
-        is KobolType.DateTimeType   -> "L$LOCALDATETIME;"
-        is KobolType.ListType       -> "Ljava/util/List;"
-        is KobolType.MapType        -> "Ljava/util/Map;"
-        is KobolType.FutureType     -> "Ljava/util/concurrent/CompletableFuture;"
-        is KobolType.RecordRefType  -> "Ljava/lang/Object;" // inner class—caller uses correct name
-        is KobolType.VariantRefType -> "Ljava/lang/Object;" // sealed variant base class
-        is KobolType.UuidType       -> "Ljava/util/UUID;"
-        is KobolType.JavaObjectType,
-        is KobolType.UnknownType    -> "Ljava/lang/Object;"
-        is KobolType.VoidType       -> "V"
-    }
+    // KobolType → JVM descriptor. Delegates to the shared `semantic` mapper so the descriptor a
+    // CALL argument is scored against (type checker) matches the one emitted here (F14, P1).
+    internal fun jvmDescriptor(type: KobolType): String = dev.kobol.semantic.kobolDescriptor(type)
 
     internal fun recDesc(owner: String, type: KobolType): String = when (type) {
         is KobolType.RecordRefType -> "L$owner\$${javaClass(type.name)};"
@@ -884,8 +866,22 @@ class AsmEmitter(
             is KobolType.IntegerType -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Long", "toString", "(J)Ljava/lang/String;", false)
             is KobolType.SmallIntType -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "toString", "(I)Ljava/lang/String;", false)
             is KobolType.BooleanType -> mv.visitMethodInsn(INVOKESTATIC, "java/lang/Boolean", "toString", "(Z)Ljava/lang/String;", false)
+            // F18: render DECIMAL/MONEY at its DECLARED scale (zero-pad up to it) instead of the
+            // raw BigDecimal scale, so DECIMAL(18,8) holding 1.5 shows "1.50000000". Pad-only — a
+            // value carrying more fraction digits is shown in full (never rounded → no hidden
+            // precision, P4). Display-only; the stored value is untouched. Both DISPLAY and string
+            // interpolation funnel through here, so one rule covers both (P1).
+            is KobolType.DecimalType -> emitDisplayPadded(mv, type.scale)
+            is KobolType.MoneyType   -> emitDisplayPadded(mv, type.scale)
             else -> mv.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Object", "toString", "()Ljava/lang/String;", false)
         }
+    }
+
+    /** Emit `KobolDecimal.toDisplayPadded(<BigDecimal on stack>, scale)` → String (F18). */
+    private fun emitDisplayPadded(mv: MethodVisitor, scale: Int) {
+        mv.visitLdcInsn(scale)
+        mv.visitMethodInsn(INVOKESTATIC, KOBOL_DECIMAL, "toDisplayPadded",
+            "(L$BIGDECIMAL;I)Ljava/lang/String;", false)
     }
 
     internal fun resolveSymbolType(ctx: MethodContext, name: String): KobolType {

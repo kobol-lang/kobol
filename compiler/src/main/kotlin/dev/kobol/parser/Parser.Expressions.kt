@@ -218,6 +218,18 @@ internal fun Parser.parsePrimary(): Expression {
             return e
         }
 
+        // Interop call in expression position: CALL owner.method [WITH|USING args] (F14). Parsed
+        // exactly like the CALL statement's head (dotted name in original case + arg list), but it
+        // yields the method's real return value. A trailing `WITH a, b` is greedy to the arg list;
+        // wrap in parens to use the result inside a larger expression — `(CALL Math.max WITH a, b) * 2`.
+        if (check(CALL)) {
+            advance() // CALL
+            val parts = mutableListOf(advance().rawValue)
+            while (check(DOT)) { advance(); parts.add(advance().rawValue) }
+            val args = if (match(WITH) || match(USING)) parseCallArgs() else emptyList()
+            return CallExpr(parts.joinToString("."), args, p)
+        }
+
         // 3rd-party constructor: NEW Owner [WITH|USING args] (F12). Owner is a dotted name kept
         // in original case (advance().rawValue) so `java.util.ArrayList` and keyword-named parts
         // survive; resolved to a JVM class at codegen like a CALL static owner.

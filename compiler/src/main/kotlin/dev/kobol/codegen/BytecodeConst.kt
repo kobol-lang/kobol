@@ -23,6 +23,7 @@ internal const val LOCALDATETIME     = "java/time/LocalDateTime"
 internal const val KOBOL_EXCEPTION       = "dev/kobol/runtime/KobolException\$ApplicationException"
 internal const val KOBOL_VALIDATION_ERROR = "dev/kobol/runtime/KobolValidationError"
 internal const val KOBOL_CONCURRENT      = "dev/kobol/runtime/KobolConcurrent"
+internal const val KOBOL_DECIMAL         = "dev/kobol/runtime/KobolDecimal"
 internal const val COMPLETABLE_FUTURE    = "java/util/concurrent/CompletableFuture"
 
 // Logging
@@ -35,38 +36,12 @@ internal const val MATH_CTX  = "dev/kobol/stdlib/KobolMathContext"
 internal const val MATH_OWN  = "dev/kobol/stdlib/KobolMath"
 internal const val JMATH_CTX = "java/math/MathContext"
 
-// Stdlib module owners (used by emitBuiltin)
-internal val STDLIB_OWNERS = mapOf(
-    "kobol/math"     to "dev/kobol/stdlib/KobolMath",
-    "kobol/text"     to "dev/kobol/stdlib/KobolText",
-    "kobol/date"     to "dev/kobol/stdlib/KobolDate",
-    "kobol/sort"     to "dev/kobol/stdlib/KobolSort",
-    "kobol/convert"  to "dev/kobol/stdlib/KobolConvert",
-    "kobol/security" to "dev/kobol/stdlib/KobolSecurity",
-    "kobol/uuid"     to "dev/kobol/stdlib/KobolUuid",
-    "http"           to "dev/kobol/stdlib/KobolHttp",
-    "jdbc"           to "dev/kobol/stdlib/KobolJdbc",
-)
-
-/**
- * `java.lang.*` classes auto-imported for a bare single-part `CALL` (spec §8.11),
- * e.g. `CALL System.currentTimeMillis GIVING t` without an explicit IMPORT.
- * Keyed by UPPERCASE owner alias → JVM binary name (original case).
- *
- * Deliberately excludes classes whose names collide with Kobol type keywords
- * (`String`, `Integer`, `Long`, `Double`, `Boolean`) — those lex as type tokens,
- * not identifiers, so a bare `CALL Integer.parseInt` cannot reach here anyway.
- * Use an explicit `IMPORT java.lang.Integer AS …` for those.
- */
-internal val JAVA_LANG_OWNERS = mapOf(
-    "SYSTEM"        to "java/lang/System",
-    "MATH"          to "java/lang/Math",
-    "THREAD"        to "java/lang/Thread",
-    "RUNTIME"       to "java/lang/Runtime",
-    "OBJECT"        to "java/lang/Object",
-    "STRINGBUILDER" to "java/lang/StringBuilder",
-    "CHARACTER"     to "java/lang/Character",
-)
+// Stdlib module owners + auto-imported java.lang.* owners. The tables live in `semantic`
+// (InteropSignatures.kt) as the single source of truth — shared with the type checker so the
+// CALL-expression owner resolution can never fork from codegen's (F14). Re-exported here under
+// the names the emitter already uses so existing call sites stay unchanged (P1).
+internal val STDLIB_OWNERS = dev.kobol.semantic.STDLIB_OWNERS
+internal val JAVA_LANG_OWNERS = dev.kobol.semantic.JAVA_LANG_OWNERS
 
 // NoSQL + Cache
 internal const val KOBOL_MONGO = "dev/kobol/stdlib/KobolMongo"
@@ -76,21 +51,11 @@ internal const val FILTERS     = "com/mongodb/client/model/Filters"
 
 /**
  * JVM binary class name for a KobolType receiver (used by emitCall instance dispatch).
- * Returns null if the type cannot be used as an instance call receiver.
+ * Returns null if the type cannot be used as an instance call receiver. Delegates to the shared
+ * `semantic` table so the type checker and codegen agree on instance-receiver classes (F14).
  */
-internal fun jvmClassForInstanceCall(type: dev.kobol.semantic.KobolType): String? = when (type) {
-    is dev.kobol.semantic.KobolType.TextType     -> "java/lang/String"
-    is dev.kobol.semantic.KobolType.DateType     -> LOCALDATE
-    is dev.kobol.semantic.KobolType.TimeType     -> LOCALTIME
-    is dev.kobol.semantic.KobolType.DateTimeType -> LOCALDATETIME
-    is dev.kobol.semantic.KobolType.MoneyType,
-    is dev.kobol.semantic.KobolType.DecimalType  -> BIGDECIMAL
-    is dev.kobol.semantic.KobolType.ListType     -> "java/util/List"
-    is dev.kobol.semantic.KobolType.MapType      -> "java/util/Map"
-    is dev.kobol.semantic.KobolType.UuidType     -> "java/util/UUID"
-    is dev.kobol.semantic.KobolType.JavaObjectType -> "java/lang/Object"
-    else -> null
-}
+internal fun jvmClassForInstanceCall(type: dev.kobol.semantic.KobolType): String? =
+    dev.kobol.semantic.instanceCallClassOf(type)
 
 /** JVM types that require INVOKEINTERFACE rather than INVOKEVIRTUAL. */
 internal val JVM_INTERFACE_TYPES = setOf(

@@ -131,8 +131,8 @@ class ClasspathSymbolResolverTest {
 
     @Test fun `resolveByArgs matches a varargs overload and reports the fixed-arg count`() {
         // String.format(String, Object...) — 3 args: arg0 → the fixed String param, args 1-2 packed
-        // into the Object[] vararg. The fixed-arity-3 format(Locale,String,Object[]) is costlier
-        // (needs an unsound String→Locale cast), so the varargs match wins.
+        // into the Object[] vararg. The fixed-arity-3 format(Locale,String,Object[]) is excluded
+        // (arg0 String is not assignable to Locale — F25), so the varargs match resolves.
         val r = resolver.resolveByArgs(
             "java/lang/String", "format",
             listOf("Ljava/lang/String;", "Ljava/lang/String;", "Ljava/lang/String;"),
@@ -140,6 +140,35 @@ class ClasspathSymbolResolverTest {
         assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
         assertEquals("(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", r.sig.descriptor)
         assertEquals(1, r.varargsFixed, "one fixed arg, the rest packed")
+    }
+
+    // ─── F25 — ref→ref arg coercion admissible only as an upcast (subtype) ────────────
+
+    @Test fun `JvmCoercion cost rejects an unrelated ref cross-cast when a subtype oracle is supplied (F25)`() {
+        val sub: (String, String) -> Boolean = resolver::isSubtype
+        // Java overload resolution NEVER inserts an argument cross-cast. String is not assignable
+        // to Locale → not a viable coercion (pre-F25 it scored as a CHECKCAST → false match → CCE).
+        assertEquals(null, JvmCoercion.cost("Ljava/lang/String;", "Ljava/util/Locale;", sub))
+        // A genuine upcast stays viable: ArrayList <: List.
+        assertTrue(JvmCoercion.cost("Ljava/util/ArrayList;", "Ljava/util/List;", sub) != null,
+            "a real upcast must remain admissible")
+        // → Object is always the safe upcast.
+        assertTrue(JvmCoercion.cost("Ljava/lang/String;", "Ljava/lang/Object;", sub) != null)
+    }
+
+    @Test fun `resolveByArgs excludes an unrelated ref cross-cast arg (F25)`() {
+        // Locale.forLanguageTag(String) is the only arity-1 overload. A Date arg is NOT a String;
+        // pre-F25 the ref→ref CHECKCAST cost made it a false match → ClassCastException at run.
+        // Now excluded → NoSuchMethod (the caller falls back to its guess, no silent mis-link).
+        val r = resolver.resolveByArgs("java/util/Locale", "forLanguageTag", listOf("Ljava/util/Date;"))
+        assertEquals(CallResolution.NoSuchMethod, r)
+    }
+
+    @Test fun `resolveByArgs admits a genuine ref upcast arg (F25)`() {
+        // Collections.max(Collection) called with an ArrayList — ArrayList <: Collection, a real
+        // implicit upcast. Must stay viable (excluding all ref→ref would regress legit upcasts).
+        val r = resolver.resolveByArgs("java/util/Collections", "max", listOf("Ljava/util/ArrayList;"))
+        assertTrue(r is CallResolution.Resolved, "a real upcast arg must resolve, got $r")
     }
 
     @Test fun `resolveByArgs prefers the long overload over narrowing when both exist`() {

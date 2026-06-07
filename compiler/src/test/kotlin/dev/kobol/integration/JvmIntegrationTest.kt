@@ -867,10 +867,10 @@ class JvmIntegrationTest {
     }
 
     // F6 (decision lock) — an uninitialized DECIMAL default zero is REPRESENTED identically to an
-    // explicit `= 0`: both `BigDecimal.ZERO` (scale 0), both DISPLAY as "0". Declared scale (18,8)
-    // is a precision budget, not a display-normalization guarantee — and BigDecimal loses no
-    // precision (arithmetic uses max-scale), so prio-4 is satisfied. This test locks that the
-    // default is CONSISTENT with explicit zero; changing only the default would break that.
+    // explicit `= 0`: both are stored as `BigDecimal.ZERO` (scale 0). The F6 decision (keep the
+    // stored default == explicit zero) still holds; F18 only changed how a DECIMAL is DISPLAYED —
+    // at its declared scale. So both now show "0.00000000" (declared scale 8), and crucially they
+    // remain CONSISTENT with each other. This locks default == explicit-zero at the display layer.
     @Test fun `uninitialized DECIMAL default matches explicit zero (F6)`() {
         val out = compileAndRun("""
             PROGRAM T
@@ -883,8 +883,47 @@ class JvmIntegrationTest {
               DISPLAY "---done---"
             END-PROCEDURE
         """)
-        assertTrue("uninit=[0]" in out, "uninitialized DECIMAL should default to 0, got:\n$out")
-        assertTrue("init0=[0]" in out, "explicit DECIMAL = 0 should be 0, got:\n$out")
+        assertTrue("uninit=[0.00000000]" in out, "uninitialized DECIMAL(18,8) should display at declared scale, got:\n$out")
+        assertTrue("init0=[0.00000000]" in out, "explicit DECIMAL(18,8) = 0 should display at declared scale, got:\n$out")
+    }
+
+    // F18 — DISPLAY and string interpolation render a DECIMAL/MONEY at its DECLARED scale (zero-pad
+    // up to it), not the raw BigDecimal scale: DECIMAL(18,8) holding 1.5 shows "1.50000000",
+    // MONEY(10,2) holding 5 shows "5.00". Pad-only — a value carrying MORE fraction digits than
+    // declared is shown in full (never rounded), so DISPLAY can never hide stored precision (P4).
+    @Test fun `DISPLAY renders a DECIMAL at its declared scale, padding (F18)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              d : DECIMAL(18,8) = 1.5
+              m : MONEY(10,2)   = 5
+            PROCEDURE Main:
+              DISPLAY "d=[{d}]"
+              DISPLAY "m=[" m "]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("d=[1.50000000]" in out, "DECIMAL(18,8) 1.5 should pad to declared scale, got:\n$out")
+        assertTrue("5.00" in out, "MONEY(10,2) 5 should pad to 5.00, got:\n$out")
+        assertTrue("---done---" in out, "program must run to completion, got:\n$out")
+    }
+
+    // F18 (P4 guard) — a value carrying MORE fraction digits than the declared scale is shown in
+    // FULL, never rounded down, so DISPLAY cannot silently hide stored precision. A DECIMAL(10,2)
+    // computed to 3 fraction digits via full-precision division must still print all 3.
+    @Test fun `DISPLAY never rounds away fraction digits beyond declared scale (F18)`() {
+        // `wide` is declared scale 1 but a LET initializer is not rescaled to the declared scale,
+        // so it stores the literal's true scale (3). Pad-only must show all 3 digits ("0.125"),
+        // NOT round down to the declared scale ("0.1") — that would hide stored precision (P4).
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE Main:
+              LET wide : DECIMAL(10,1) = 0.125
+              DISPLAY "wide=[{wide}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("wide=[0.125]" in out, "value with more fraction digits than declared must print in full (not rounded), got:\n$out")
     }
 
     // F7 — field-init dedup must preserve the two-phase ordering: a DATA initializer that
@@ -1343,6 +1382,30 @@ class JvmIntegrationTest {
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
 
+    @Test fun `instance CALL on a var whose name collides with an IMPORT alias resolves to the var (F23)`() {
+        // The local `sb` uppercases to `SB`, the SAME key as `IMPORT … AS SB`. Pre-F23 emitCall
+        // checked the import alias BEFORE the local, so `CALL sb.append` mis-routed to an
+        // INVOKESTATIC on java.lang.StringBuilder → wrong descriptor at run, type-checks clean =
+        // P3 landmine. The more-specific scope (a real variable) must win.
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              t : TEXT
+            PROCEDURE Main:
+              LET sb = NEW SB
+              CALL sb.append WITH "hi"
+              CALL sb.append WITH "there"
+              CALL sb.toString GIVING t
+              DISPLAY t
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "hithere" },
+            "a variable must win over a same-named IMPORT alias; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
     @Test fun `interop CALL packs trailing args into a varargs parameter (F24)`() {
         // String.format(String, Object...) is varargs — descriptor (String,[Object])String. With
         // no varargs support a 3-arg call mis-linked the fixed-arity-3 format(Locale,String,Object[])
@@ -1362,6 +1425,67 @@ class JvmIntegrationTest {
         """)
         assertTrue(out.lineSequence().any { it.trim() == "a-b" },
             "String.format must pack varargs and yield \"a-b\"; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    // ─── F14 — interop CALL as an expression (CALL in COMPUTE/LET position) ───────────
+    // A `CALL` in expression position must resolve its REAL return type at type-check time
+    // (E2 classpath read), type the LHS from it, and leave the coerced value on the stack —
+    // not the type-check-clean→runtime-crash landmine an opaque Object guess would create.
+
+    @Test fun `static interop CALL as an expression types the LET from the real return (F14)`() {
+        // Math.max(long,long) → long; the LET infers INTEGER (J) from the real descriptor, no
+        // annotation. Auto-imported java.lang.Math (JAVA_LANG_OWNERS), no explicit IMPORT.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : INTEGER = 7
+              b : INTEGER = 12
+            PROCEDURE Main:
+              LET n = CALL Math.max WITH a, b
+              DISPLAY "n={n}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("n=12" in out, "CALL Math.max WITH 7, 12 should yield 12; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `instance interop CALL as an expression resolves the receiver return type (F14)`() {
+        // s.substring(int) → String; COMPUTE target is TEXT, the real return coerces cleanly.
+        // The INTEGER arg (J) narrows into the int param via F22's guarded Math.toIntExact.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              s : TEXT = "hello"
+              start : INTEGER = 1
+              tail : TEXT
+            PROCEDURE Main:
+              COMPUTE tail = CALL s.substring WITH start
+              DISPLAY "tail={tail}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("tail=ello" in out, "CALL s.substring WITH 1 should yield \"ello\"; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `CALL expression result feeds directly into a larger expression (F14)`() {
+        // The CALL-expr value composes: COMPUTE doubled = (CALL Math.max ...) * 2.
+        // Proves the call leaves a usable typed value on the stack, not a discarded statement.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : INTEGER = 5
+              b : INTEGER = 9
+              doubled : INTEGER = 0
+            PROCEDURE Main:
+              COMPUTE doubled = (CALL Math.max WITH a, b) * 2
+              DISPLAY "doubled={doubled}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("doubled=18" in out, "(max(5,9)) * 2 should be 18; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
 }

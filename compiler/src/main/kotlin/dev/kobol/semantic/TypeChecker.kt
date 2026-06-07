@@ -37,7 +37,26 @@ class TypeChecker(
     /** Type annotations attached to every Expression node (keyed by identity). */
     private val exprTypes = IdentityHashMap<Expression, KobolType>()
 
+    /** Import alias (UPPERCASE) → JVM binary class path; built in [analyze] from program imports. */
+    private var importAliasMap: Map<String, String> = emptyMap()
+
+    /**
+     * Classpath-aware interop resolver (E2), shared design with codegen. Lazily built from the same
+     * runtime classpath the program compiles against, so a `CALL` expression's inferred return type
+     * (here) is computed against the exact methods codegen will link (F14). Lazy → programs with no
+     * interop CALL expression pay nothing.
+     */
+    private val interopResolver: ClasspathSymbolResolver? by lazy {
+        runCatching { ClasspathSymbolResolver(dev.kobol.KobolHome.runtimeClasspath()) }.getOrNull()
+    }
+
     fun analyze(program: Program) {
+        // Build the import alias map up front (UPPERCASE alias → slashed JVM path) — same construction
+        // codegen uses — so CALL-expression owner resolution agrees with codegen (F14).
+        importAliasMap = program.imports.associate { imp ->
+            val alias = (imp.alias ?: imp.qualifiedName.substringAfterLast('.')).uppercase()
+            alias to imp.qualifiedName.replace('.', '/')
+        }
         // Pass 0: register type aliases so they are available during type resolution
         for (alias in program.typeAliases) {
             typeAliases[alias.name] = toKobolType(alias.target)
@@ -985,9 +1004,91 @@ class TypeChecker(
             KobolType.JavaObjectType(ownerName = expr.owner)
         }
 
+        is CallExpr -> inferCallExprType(expr)
+
         is NamedArgument -> checkExpr(expr.value)
 
         is PipelineExpr -> inferPipelineType(expr)
+    }
+
+    /**
+     * Infer the static type of a `CALL` in expression position (F14) from the method's REAL return
+     * descriptor, read off the compile classpath (E2). The owner is resolved with the SAME shared
+     * logic codegen uses ([resolveInteropTarget]) and the arguments are scored with the SAME
+     * descriptor mapping ([kobolDescriptor]), so the type computed here is exactly the type codegen
+     * emits — no type-check-clean→runtime-crash gap.
+     *
+     * Unresolvable (class not on the classpath, no matching/ambiguous overload), a `void` method, or
+     * a return descriptor with no Kobol type → a diagnostic + [KobolType.UnknownType] (rejected at
+     * compile time, never a silent Object guess).
+     */
+    private fun inferCallExprType(expr: CallExpr): KobolType {
+        expr.args.forEach {
+            if (it is NamedArgument)
+                error("E031", "CALL expression: named arguments need a known signature; use positional arguments", it.pos)
+            checkExpr(it)
+        }
+        val parts      = expr.method.split(".")
+        val methodName = parts.last()
+        val ownerParts = parts.dropLast(1)
+
+        val resolver = interopResolver
+        if (resolver == null) {
+            error("E230", "CALL expression '${expr.method}': interop classpath unavailable, cannot resolve return type", expr.pos)
+            return KobolType.UnknownType
+        }
+
+        // Receiver type for a single-part owner that names a known variable (else null) — mirrors
+        // codegen's receiver detection so static/instance dispatch is decided identically. Symbols
+        // are keyed by the UPPERCASE-normalised name (the owner part keeps original source case).
+        val receiverType: KobolType? = if (ownerParts.size == 1) {
+            when (val sym = symbols.resolve(ownerParts[0].uppercase())) {
+                is Symbol.Variable -> sym.type
+                is Symbol.Constant -> sym.type
+                else -> null
+            }
+        } else null
+
+        val target = resolveInteropTarget(ownerParts, importAliasMap, receiverType)
+        val owner = when (target) {
+            is InteropTarget.Static   -> target.owner
+            is InteropTarget.Instance -> target.owner
+            else -> {
+                error("E231", "CALL expression '${expr.method}' has no resolvable interop owner; the reflective `alias.FIELD.method` form is only valid as a statement", expr.pos)
+                return KobolType.UnknownType
+            }
+        }
+
+        val argDescs = expr.args.map { kobolDescriptor(exprTypes[it] ?: inferType(it)) }
+        return when (val res = resolver.resolveByArgs(owner, methodName, argDescs)) {
+            is ClasspathSymbolResolver.CallResolution.Resolved -> {
+                val retDesc = org.objectweb.asm.Type.getReturnType(res.sig.descriptor).descriptor
+                val kt = kobolTypeFromDescriptor(retDesc)
+                when {
+                    retDesc == "V" -> {
+                        error("E232", "CALL expression '${expr.method}' calls a void method — it has no value; use a CALL statement instead", expr.pos)
+                        KobolType.UnknownType
+                    }
+                    kt == null -> {
+                        error("E233", "CALL expression '${expr.method}' returns '$retDesc', which has no Kobol type", expr.pos)
+                        KobolType.UnknownType
+                    }
+                    else -> kt
+                }
+            }
+            is ClasspathSymbolResolver.CallResolution.Ambiguous -> {
+                error("E234", "CALL expression '${expr.method}': ambiguous overload for these argument types", expr.pos)
+                KobolType.UnknownType
+            }
+            ClasspathSymbolResolver.CallResolution.NoSuchMethod -> {
+                error("E235", "CALL expression '${expr.method}': no method matches these argument types on '$owner'", expr.pos)
+                KobolType.UnknownType
+            }
+            ClasspathSymbolResolver.CallResolution.ClassNotFound -> {
+                error("E236", "CALL expression '${expr.method}': class '$owner' not found on the classpath (missing IMPORT?)", expr.pos)
+                KobolType.UnknownType
+            }
+        }
     }
 
     private fun inferBuiltinType(expr: BuiltinCall): KobolType {

@@ -54,8 +54,21 @@ object JvmCoercion {
 
     private fun isRef(d: String) = d.startsWith("L") || d.startsWith("[")
 
-    /** Coercion cost (lower = closer match), or null if unsupported. */
-    fun cost(from: String, to: String): Int? {
+    /** Descriptor (`Lpkg/Cls;` / `[…`) → ASM internal name (`pkg/Cls` / `[…`). */
+    private fun internalName(d: String): String =
+        if (d.startsWith("L")) d.substring(1, d.length - 1) else Type.getType(d).internalName
+
+    /**
+     * Coercion cost (lower = closer match), or null if unsupported.
+     *
+     * @param isSubtype hierarchy oracle for the reference→reference case (**F25**). When supplied
+     *   (overload-argument ranking), a `from → to` between unrelated reference types is REJECTED —
+     *   Java overload resolution never inserts an argument cross-cast, so admitting it would let the
+     *   ranker pick a method that then throws `ClassCastException` at run. Only a genuine upcast
+     *   (`from <: to`) or `→ Object` is viable. When null (e.g. the explicit-`GIVING` return
+     *   coercion, where the user instructed the cast) the legacy permissive `CHECKCAST` is kept.
+     */
+    fun cost(from: String, to: String, isSubtype: ((String, String) -> Boolean)? = null): Int? {
         if (from == to) return 0
         val rf = numericRank[from]
         val rt = numericRank[to]
@@ -67,8 +80,11 @@ object JvmCoercion {
         if (rf != null && to == wrapperOf[from]) return 7                    // exact boxing
         if (rf != null && to == OBJECT) return 8                            // box → Object
         if (from == "Z" && (to == OBJECT || to == wrapperOf["Z"])) return 8
-        if (isRef(from) && to == OBJECT) return 4
-        if (isRef(from) && isRef(to)) return 9                              // CHECKCAST
+        if (isRef(from) && to == OBJECT) return 4                           // always-safe upcast
+        if (isRef(from) && isRef(to)) {                                     // CHECKCAST
+            if (isSubtype == null) return 9                                 // permissive (return coercion)
+            return if (isSubtype(internalName(from), internalName(to))) 9 else null  // arg: upcast only (F25)
+        }
         return null
     }
 

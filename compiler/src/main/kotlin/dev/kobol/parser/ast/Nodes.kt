@@ -685,6 +685,20 @@ data class NewExpr(
 ) : Expression()
 
 /**
+ * Interop method call in EXPRESSION position (F14): `COMPUTE x = CALL s.substring WITH 1`,
+ * `LET n = CALL Math.max WITH a, b`. Mirrors [CallStatement] but yields a value: the method's
+ * REAL return type, resolved at type-check time off the compile classpath (E2). [method] keeps
+ * the dotted owner.method in original source case ("Math.max", "s.substring"); resolution of the
+ * owner + return descriptor is shared with both the type checker and codegen so the inferred
+ * static type and the emitted bytecode can never disagree (no type-check-clean→runtime-crash).
+ */
+data class CallExpr(
+    val method: String,
+    val args: List<Expression>,
+    override val pos: SourcePosition,
+) : Expression()
+
+/**
  * A named argument in a PERFORM / DO call (ergonomics §17.12).
  * Wraps a regular expression with the declared parameter name.
  */
