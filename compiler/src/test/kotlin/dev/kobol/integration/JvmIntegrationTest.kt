@@ -1238,6 +1238,93 @@ class JvmIntegrationTest {
         assertTrue("got=apple 1" in out, "map value must keep its snapshot, got:\n$out")
     }
 
+    // F2 (variant leg) — constructing a VARIANT case with a RECORD-typed field arg must snapshot
+    // the record buffer, not alias it. `copy()` is shallow by contract ("nested records are copied
+    // at their own copy sites" — AsmEmitter.emitRecordCopy) and a variant case field IS such a site.
+    // Before the fix `Full(buf)` stored the live `buf` reference into the variant's field, so a later
+    // `MOVE … TO buf.field` leaked into the already-constructed variant (read back via MATCH).
+    @Test fun `variant construction snapshots a record-typed field argument (F2)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            VARIANT Wrap IS
+              Empty
+              | Full WITH it : Item
+            DATA:
+              buf : Item
+              w   : Wrap
+            PROCEDURE Main:
+              MOVE "apple" TO buf.name
+              MOVE 1 TO buf.qty
+              MOVE Full(buf) TO w
+              MOVE "banana" TO buf.name
+              MOVE 2 TO buf.qty
+              MATCH w:
+                WHEN Empty:
+                  DISPLAY "empty"
+                WHEN Full WITH it:
+                  DISPLAY "w={it.name} {it.qty}"
+              END-MATCH
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("w=apple 1" in out, "variant case field must keep its snapshot, not alias buf, got:\n$out")
+    }
+
+    // F2 (record-literal leg) — a RECORD literal with a RECORD-typed field must snapshot the nested
+    // record value, not alias it. Same shallow-copy contract: the nested-record field of a literal is
+    // one of the "own copy sites". Before the fix `Box { it: buf }` aliased `buf`; the outer MOVE's
+    // shallow copy preserved that shared reference, so mutating `buf` leaked into `bx.it`.
+    @Test fun `record literal snapshots a nested record-typed field (F2)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            RECORD Box:
+              it : Item
+            DATA:
+              buf : Item
+              bx  : Box
+            PROCEDURE Main:
+              MOVE "apple" TO buf.name
+              MOVE 1 TO buf.qty
+              MOVE Box { it: buf } TO bx
+              MOVE "banana" TO buf.name
+              MOVE 2 TO buf.qty
+              DISPLAY "bx={bx.it.name} {bx.it.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("bx=apple 1" in out, "nested record field must keep its snapshot, not alias buf, got:\n$out")
+    }
+
+    // Read-hole (found during F2) — a second-level record field read (`bx.it.name`) loads the
+    // intermediate record via a GETFIELD whose descriptor erases to Object (records erase); the
+    // next GETFIELD on the concrete record class then needs a CHECKCAST or the verifier rejects it
+    // ("Object not assignable to T${'$'}Item"). One-level reads worked only because a root DATA field
+    // loads concrete via GETSTATIC. No aliasing here — pure nested read must just verify and run.
+    @Test fun `nested record field reads without a VerifyError`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Item:
+              name : TEXT
+              qty  : INTEGER
+            RECORD Box:
+              it : Item
+            DATA:
+              bx : Box
+            PROCEDURE Main:
+              MOVE Box { it: Item { name: "apple", qty: 7 } } TO bx
+              DISPLAY "bx={bx.it.name} {bx.it.qty}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("bx=apple 7" in out, "nested record field read must verify and yield the stored value, got:\n$out")
+    }
+
     // #12 — MAP PUT/GET previously did not parse at all ("Unexpected token 'PUT'"). Now they
     // are contextual statements over a java.util.Map (LinkedHashMap): PUT inserts/overwrites,
     // GET looks up and unboxes into the target.

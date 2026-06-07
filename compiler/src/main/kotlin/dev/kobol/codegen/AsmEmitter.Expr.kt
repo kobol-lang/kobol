@@ -142,6 +142,7 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
                     val vType = inferExprType(f.value)
                     if (fType is KobolType.MoneyType || fType is KobolType.DecimalType) coerceToDecimalIfNeeded(mv, vType)
                     else coerceIntToTarget(mv, vType, fType)
+                    snapshotIfRecord(ctx, vType)   // F2: a record-typed literal field is a "copy site" — snapshot, don't alias the buffer
                     mv.visitFieldInsn(PUTFIELD, className, javaIdent(f.name), jvmDescriptor(fType))
                 }
             }
@@ -430,6 +431,7 @@ internal fun AsmEmitter.emitVariantConstruction(
         val aType = inferExprType(arg)
         if (fType is KobolType.MoneyType || fType is KobolType.DecimalType) coerceToDecimalIfNeeded(mv, aType)
         else coerceIntToTarget(mv, aType, fType)
+        snapshotIfRecord(ctx, aType)   // F2: a record-typed case field is a "copy site" — snapshot, don't alias the buffer
     }
     val paramDesc = case.fields.joinToString("") { jvmDescriptor(checker.toKobolType(it.type)) }
     mv.visitMethodInsn(INVOKESPECIAL, caseClass, "<init>", "($paramDesc)V", false)
@@ -777,6 +779,13 @@ internal fun AsmEmitter.loadRef(ctx: MethodContext, ref: Reference) {
                 }
                 currentType is KobolType.RecordRefType -> {
                     val recName = "${ctx.owner}\$${javaClass(currentType.name)}"
+                    // The receiver may be erased to Object on the stack — a record reached via a
+                    // prior GETFIELD/bound MATCH local has descriptor `Ljava/lang/Object;` (records
+                    // erase, kobolDescriptor), so a concrete GETFIELD/INVOKEVIRTUAL below would fail
+                    // verification ("Object not assignable to recName"). CHECKCAST to the concrete
+                    // record class first; a no-op when the receiver is already concrete (root DATA
+                    // field via GETSTATIC). Fixes nested (`a.b.c`) and bound-local record field reads.
+                    mv.visitTypeInsn(CHECKCAST, recName)
                     val recSym = checker.symbols.resolve(currentType.name) as? Symbol.RecordSymbol
                     if (recSym != null && recSym.conditions.containsKey(field)) {
                         // Record CONDITION (e.g. cust.HighValue) → call its synthetic
