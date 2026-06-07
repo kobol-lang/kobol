@@ -2110,4 +2110,100 @@ class JvmIntegrationTest {
         assertTrue("q=3.333333333333333" in out, "DECIMAL128 keeps many threes; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
+
+    // -------------------------------------------------------------------------
+    // #v11 — integer-operand arithmetic into a DECIMAL/MONEY target. The receiving
+    // field governs precision (spec §12), so two INTEGER operands must lower to the
+    // BigDecimal path, not integer LADD/LDIV. Previously every one of these failed the
+    // bytecode VERIFIER at load (`long_2nd not assignable to BigDecimal`).
+    // -------------------------------------------------------------------------
+
+    @Test fun `integer divide into a DECIMAL target loads and runs (v11)`() {
+        // Was a VerifyError at load. `/` uses the shared decimal path → HALF-EVEN default;
+        // a literal dividend has scale 0, so 10/3 → 3, then the store rescales to the field.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              q : DECIMAL(12,2) = 0.0
+            PROCEDURE Main:
+              COMPUTE q = 10 / 3
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=3.00" in out, "10/3 → decimal 3 → 3.00; got:\n$out")
+        assertTrue("---done---" in out, "program must complete (no VerifyError); got:\n$out")
+    }
+
+    @Test fun `integer divide into DECIMAL rounds HALF-EVEN not integer-truncating (v11)`() {
+        // The discriminator: integer LDIV would give 7/2 = 3 (truncate). The decimal path with
+        // the spec's HALF-EVEN default rounds 3.5 to the even digit → 4. Proves we took the
+        // BigDecimal path, not the old long path.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              q : DECIMAL(12,2) = 0.0
+            PROCEDURE Main:
+              COMPUTE q = 7 / 2
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=4.00" in out, "7/2 via decimal HALF-EVEN → 4 (not integer-truncated 3); got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `integer add and multiply into DECIMAL and MONEY are exact (v11)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              s : DECIMAL(12,2) = 0.0
+              p : MONEY(12,2) = 0.00
+            PROCEDURE Main:
+              COMPUTE s = 10 + 3
+              COMPUTE p = 7 * 6
+              DISPLAY "s={s}"
+              DISPLAY "p={p}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("s=13.00" in out, "10+3 exact decimal; got:\n$out")
+        assertTrue("p=42.00" in out, "7*6 exact money; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `integer POWER into a DECIMAL target loads and runs (v11)`() {
+        // `2 ** 8` with two integer operands and a DECIMAL target: the `**` operator must take
+        // the decimal pow path (was the integer power(JJ)J → long → VerifyError on a decimal store).
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              q : DECIMAL(12,2) = 0.0
+            PROCEDURE Main:
+              COMPUTE q = 2 ** 8
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=256.00" in out, "2**8 = 256 into decimal; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `DECIMAL variable dividend still keeps its scale after the v11 fix (v11 regression)`() {
+        // Guard the existing behavior: a DECIMAL *variable* dividend already carries its field
+        // scale, so a/3 keeps that scale (3.3) — the v11 contextual path must not change it.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : DECIMAL(12,1) = 10.0
+              q : DECIMAL(12,1) = 0.0
+            PROCEDURE Main:
+              COMPUTE q = a / 3
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=3.3" in out, "decimal-variable dividend keeps scale → 3.3; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
 }

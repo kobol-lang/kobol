@@ -292,12 +292,24 @@ internal fun isJvmReference(type: KobolType): Boolean = when (type) {
     else -> true
 }
 
-internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr) {
+internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr, contextType: KobolType? = null) {
         val mv    = ctx.mv
         val lType = inferExprType(expr.left)
         val rType = inferExprType(expr.right)
+        // The receiving field governs precision (spec §12): when an arithmetic result is stored
+        // into a DECIMAL/MONEY target, evaluate in BigDecimal even if BOTH operands are INTEGER —
+        // otherwise integer LDIV/LADD leaves a `long` where the decimal store wants a BigDecimal
+        // (VerifyError, #v11). Mirrors emitArith, which already keys decimal-vs-long off the dest
+        // type (#9); emitBinaryExpr was the lone arithmetic site keying off operand types only.
+        // Restricted to arithmetic ops with numeric operands so comparisons/text stay on their
+        // own paths. `/` then honors spec's HALF-EVEN default via the shared decimal path.
+        val ctxDecimal = (contextType is KobolType.MoneyType || contextType is KobolType.DecimalType) &&
+                         (expr.op == BinaryOp.ADD || expr.op == BinaryOp.SUBTRACT ||
+                          expr.op == BinaryOp.MULTIPLY || expr.op == BinaryOp.DIVIDE ||
+                          expr.op == BinaryOp.POWER) &&
+                         lType.isNumeric() && rType.isNumeric()
         val numeric = lType is KobolType.MoneyType || lType is KobolType.DecimalType ||
-                      rType is KobolType.MoneyType || rType is KobolType.DecimalType
+                      rType is KobolType.MoneyType || rType is KobolType.DecimalType || ctxDecimal
 
         if (numeric) {
             emitExpr(ctx, expr.left)

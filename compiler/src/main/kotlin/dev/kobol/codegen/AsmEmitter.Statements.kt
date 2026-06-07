@@ -47,24 +47,45 @@ internal fun AsmEmitter.emitDisplay(ctx: MethodContext, stmt: DisplayStatement) 
     }
 
 
+/**
+ * Emit an expression whose result is stored into a value of `targetType`. When the target is
+ * DECIMAL/MONEY and the RHS is an arithmetic BinaryExpr, the operation is evaluated in BigDecimal
+ * even if both operands are INTEGER (the receiving field governs precision — spec §12, #v11);
+ * otherwise an integer LADD/LDIV would leave a `long` where the decimal store needs a BigDecimal.
+ * For non-arithmetic RHS it emits the value then widens an INTEGER/SMALLINT result to the target
+ * (the same coercion MOVE/local-decl already do). One shared rule for every typed-target store.
+ */
+internal fun AsmEmitter.emitExprForTarget(ctx: MethodContext, expr: Expression, targetType: KobolType) {
+        val targetDecimal = targetType is KobolType.MoneyType || targetType is KobolType.DecimalType
+        if (targetDecimal && expr is BinaryExpr) {
+            // contextType lets emitBinaryExpr take the BigDecimal path for two integer operands.
+            emitBinaryExpr(ctx, expr, contextType = targetType)
+            return
+        }
+        emitExpr(ctx, expr)
+        if (targetDecimal) coerceToDecimalIfNeeded(ctx.mv, inferExprType(expr))
+        else coerceIntToTarget(ctx.mv, inferExprType(expr), targetType)
+    }
+
 internal fun AsmEmitter.emitCompute(ctx: MethodContext, stmt: ComputeStatement) {
         if (stmt.target.parts.size == 1) {
             val name = stmt.target.parts[0]
             val existingLocal = ctx.getLocal(name)
             if (existingLocal != null) {
-                emitExpr(ctx, stmt.expr)
+                emitExprForTarget(ctx, stmt.expr, existingLocal.type)
                 storeLocal(ctx.mv, existingLocal.type, existingLocal.slot)
             } else if (name in dataSectionNames) {
-                emitExpr(ctx, stmt.expr)
+                emitExprForTarget(ctx, stmt.expr, resolveRefFinalType(ctx, stmt.target))
                 emitStore(ctx, stmt.target)
             } else {
+                // New local (LET): type is inferred from the expression itself — no target context.
                 val kType = inferExprType(stmt.expr)
                 emitExpr(ctx, stmt.expr)
                 val slot = ctx.allocLocal(name, kType)
                 storeLocal(ctx.mv, kType, slot)
             }
         } else {
-            emitExpr(ctx, stmt.expr)
+            emitExprForTarget(ctx, stmt.expr, resolveRefFinalType(ctx, stmt.target))
             emitStore(ctx, stmt.target)
         }
     }
