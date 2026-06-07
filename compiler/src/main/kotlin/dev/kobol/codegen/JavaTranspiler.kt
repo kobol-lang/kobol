@@ -597,6 +597,10 @@ class JavaTranspiler(
         // CALL in expression position (F14): emit the same `owner.method(args)` Java the CALL
         // statement emits — the dotted owner is a Java static class or an instance variable either way.
         is CallExpr -> "${expr.method}(${expr.args.joinToString(", ") { emitExpr(it) }})"
+
+        // #v7 — list indexing. Dormant backend, best-effort: 1-based → 0-based List.get; the
+        // element stays boxed (the ASM path unboxes/casts via castFromObject — ported if revived).
+        is IndexExpr -> "${emitExpr(expr.target)}.get((int)(${emitExpr(expr.index)}) - 1)"
     }
 
     /**

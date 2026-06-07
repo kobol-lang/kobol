@@ -1878,4 +1878,123 @@ class JvmIntegrationTest {
         assertTrue("date-set=" in out, "bare TODAY initializer must run; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
+
+    // -------------------------------------------------------------------------
+    // v2 prose surface — English-prose numeric builtins + SPLIT (spec §12, §11.2),
+    // and v7 list indexing (spec §11.2). These parsed-then-ran end to end.
+    // -------------------------------------------------------------------------
+
+    @Test fun `prose numeric builtin forms compile load and run (v2)`() {
+        // Every spec §12 prose form: ROUND..TO[..USING], MAX/MIN a,b, MOD..BY,
+        // POWER..BY, SQRT/ABS/SIGN/FLOOR/CEIL x, plus an arithmetic ROUND head
+        // (`ROUND base * pct TO 2`) to prove the value before TO is a full expression.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              amount : DECIMAL(12,4) = 2.5450
+              a-val  : DECIMAL(10,2) = 12.34
+              b-val  : DECIMAL(10,2) = 56.78
+              neg    : DECIMAL(10,2) = -8.50
+              rate   : DECIMAL(10,2) = 3.70
+              base   : DECIMAL(10,2) = 10.00
+              pct    : DECIMAL(10,4) = 0.0750
+              he : DECIMAL(12,2)
+              hu : DECIMAL(12,2)
+              mx : DECIMAL(10,2)
+              mn : DECIMAL(10,2)
+              rem : INTEGER
+              pw : DECIMAL(12,4)
+              rt : DECIMAL(12,4)
+              av : DECIMAL(10,2)
+              sg : INTEGER
+              fl : DECIMAL(12,4)
+              ce : DECIMAL(12,4)
+              tx : DECIMAL(12,2)
+            PROCEDURE Main:
+              COMPUTE he  = ROUND amount TO 2
+              COMPUTE hu  = ROUND amount TO 2 USING HALF-UP
+              COMPUTE mx  = MAX a-val, b-val
+              COMPUTE mn  = MIN a-val, b-val
+              COMPUTE rem = MOD 17 BY 5
+              COMPUTE pw  = POWER 2 BY 8
+              COMPUTE rt  = SQRT 16
+              COMPUTE av  = ABS neg
+              COMPUTE sg  = SIGN neg
+              COMPUTE fl  = FLOOR rate
+              COMPUTE ce  = CEIL rate
+              COMPUTE tx  = ROUND base * pct TO 2
+              DISPLAY "he={he}"
+              DISPLAY "hu={hu}"
+              DISPLAY "mx={mx}"
+              DISPLAY "mn={mn}"
+              DISPLAY "rem={rem}"
+              DISPLAY "pw={pw}"
+              DISPLAY "rt={rt}"
+              DISPLAY "av={av}"
+              DISPLAY "sg={sg}"
+              DISPLAY "fl={fl}"
+              DISPLAY "ce={ce}"
+              DISPLAY "tx={tx}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("he=2.54" in out, "ROUND 2.545 TO 2 HALF-EVEN = 2.54; got:\n$out")
+        assertTrue("hu=2.55" in out, "ROUND 2.545 TO 2 USING HALF-UP = 2.55; got:\n$out")
+        assertTrue("mx=56.78" in out, "MAX 12.34, 56.78 = 56.78; got:\n$out")
+        assertTrue("mn=12.34" in out, "MIN 12.34, 56.78 = 12.34; got:\n$out")
+        assertTrue("rem=2" in out, "MOD 17 BY 5 = 2; got:\n$out")
+        assertTrue("pw=256" in out, "POWER 2 BY 8 = 256; got:\n$out")
+        assertTrue("rt=4.0000" in out, "SQRT 16 = 4; got:\n$out")
+        assertTrue("av=8.50" in out, "ABS -8.50 = 8.50; got:\n$out")
+        assertTrue("sg=-1" in out, "SIGN -8.50 = -1; got:\n$out")
+        assertTrue("fl=3.0000" in out, "FLOOR 3.70 = 3; got:\n$out")
+        assertTrue("ce=4.0000" in out, "CEIL 3.70 = 4; got:\n$out")
+        assertTrue("tx=0.75" in out, "ROUND 10.00 * 0.0750 TO 2 = 0.75; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `SPLIT prose form with list indexing (v2 plus v7)`() {
+        // The spec's marquee §11.2 example: SPLIT … BY … then read elements back by
+        // 1-based index. Exercises both the prose SPLIT and `list[i]` (TEXT element).
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE Main:
+              LET parts = SPLIT "GL-001-0042" BY "-"
+              DISPLAY "f1={parts[1]}"
+              DISPLAY "f2={parts[2]}"
+              DISPLAY "f3={parts[3]}"
+              LET limited = SPLIT "a:b:c:d" BY ":" LIMIT 2
+              DISPLAY "lim1={limited[1]}"
+              DISPLAY "lim2={limited[2]}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("f1=GL" in out, "parts[1] = GL; got:\n$out")
+        assertTrue("f2=001" in out, "parts[2] = 001; got:\n$out")
+        assertTrue("f3=0042" in out, "parts[3] = 0042; got:\n$out")
+        assertTrue("lim1=a" in out, "LIMIT 2 first part = a; got:\n$out")
+        assertTrue("lim2=b:c:d" in out, "LIMIT 2 last part holds the remainder; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `list indexing unboxes an INTEGER element (v7)`() {
+        // A LIST OF INTEGER element is a boxed Long; `nums[2]` unboxes it into the
+        // INTEGER (long) slot via castFromObject.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              nums : LIST OF INTEGER
+              n : INTEGER
+            PROCEDURE Main:
+              ADD 10 TO nums
+              ADD 20 TO nums
+              ADD 30 TO nums
+              COMPUTE n = nums[2]
+              DISPLAY "n={n}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("n=20" in out, "nums[2] (1-based) = 20; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
 }

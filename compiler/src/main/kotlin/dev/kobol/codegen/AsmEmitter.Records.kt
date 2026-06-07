@@ -51,6 +51,9 @@ private fun rewriteFieldRefsToSelf(expr: Expression, fieldNames: Set<String>): E
             rewriteFieldRefsToSelf(expr.right, fieldNames), expr.pos)
         is UnaryExpr -> UnaryExpr(expr.op, rewriteFieldRefsToSelf(expr.operand, fieldNames), expr.pos)
         is BuiltinCall -> BuiltinCall(expr.name, expr.args.map { rewriteFieldRefsToSelf(it, fieldNames) }, expr.pos)
+        is IndexExpr -> IndexExpr(
+            rewriteFieldRefsToSelf(expr.target, fieldNames),
+            rewriteFieldRefsToSelf(expr.index, fieldNames), expr.pos)
         else -> expr
     }
 

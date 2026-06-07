@@ -1053,6 +1053,22 @@ class TypeChecker(
         is NamedArgument -> checkExpr(expr.value)
 
         is PipelineExpr -> inferPipelineType(expr)
+
+        is IndexExpr -> {
+            val targetType = checkExpr(expr.target)
+            val idxType    = checkExpr(expr.index)
+            if (idxType !is KobolType.IntegerType && idxType !is KobolType.SmallIntType &&
+                idxType !is KobolType.UnknownType)
+                error("E033", "A list index must be an INTEGER, got $idxType", expr.index.pos)
+            when (targetType) {
+                is KobolType.ListType    -> targetType.elementType
+                is KobolType.UnknownType -> KobolType.UnknownType
+                else -> {
+                    error("E032", "Cannot index a non-list value of type $targetType with `[...]`", expr.pos)
+                    KobolType.UnknownType
+                }
+            }
+        }
     }
 
     /**

@@ -177,7 +177,26 @@ internal fun AsmEmitter.emitExpr(ctx: MethodContext, expr: Expression) {
             is NamedArgument -> emitExpr(ctx, expr.value)
 
             is PipelineExpr -> emitPipeline(ctx, expr)
+
+            is IndexExpr -> emitIndex(ctx, expr)
         }
+    }
+
+/**
+ * List element indexing `list[i]` (#v7). The index is 1-based (spec §11.2) so we subtract 1 for
+ * `java.util.List.get(int)`, which returns `Object` — [castFromObject] unboxes/casts it to the
+ * list's element type (e.g. String for `SPLIT … BY …`, Long for `LIST OF INTEGER`).
+ */
+internal fun AsmEmitter.emitIndex(ctx: MethodContext, expr: IndexExpr) {
+        val mv       = ctx.mv
+        val elemType = (inferExprType(expr.target) as? KobolType.ListType)?.elementType
+            ?: KobolType.UnknownType
+        emitExpr(ctx, expr.target)                                  // java/util/List
+        emitExpr(ctx, expr.index)                                   // INTEGER (long) or SMALLINT (int)
+        if (inferExprType(expr.index) is KobolType.IntegerType) mv.visitInsn(L2I)
+        mv.visitInsn(ICONST_1); mv.visitInsn(ISUB)                  // 1-based → 0-based
+        mv.visitMethodInsn(INVOKEINTERFACE, "java/util/List", "get", "(I)Ljava/lang/Object;", true)
+        castFromObject(mv, elemType, ctx.owner)
     }
 
 internal fun AsmEmitter.emitLiteral(mv: MethodVisitor, lit: Literal) {

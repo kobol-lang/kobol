@@ -332,6 +332,7 @@ class Repl {
         is CallExpr          -> "CALL ${expr.method}(${expr.args.size} arg(s))"
         is NamedArgument     -> "${expr.paramName}: ${exprSummary(expr.value)}"
         is PipelineExpr      -> "${exprSummary(expr.source)} |> ${expr.stages.size} stage(s)"
+        is IndexExpr         -> "${exprSummary(expr.target)}[${exprSummary(expr.index)}]"
     }
 
     // -------------------------------------------------------------------------

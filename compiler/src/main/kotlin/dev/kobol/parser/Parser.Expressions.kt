@@ -85,6 +85,14 @@ internal fun Parser.parseUnaryExpr(): Expression {
 
 internal fun Parser.parsePipelineOrPrimary(): Expression {
         var expr = parsePrimary()
+        // List element indexing (spec §11.2): `fields[1]`, `fields[i]`. Binds tighter than a
+        // pipeline; 1-based per the spec. Chains (`grid[1][2]`) loop naturally. #v7
+        while (check(LBRACKET)) {
+            val ip = currentPos(); advance()
+            val index = parseExpression()
+            expect(RBRACKET, "Expected ']' to close a list index")
+            expr = IndexExpr(expr, index, ip)
+        }
         // Pipeline stages follow the collection expression — but not while parsing a FILTER
         // predicate (else `NOT paid` would swallow the enclosing `TRANSFORM TO amount SUM`).
         while (!suppressPipelineStages && (check(FILTER) || check(TRANSFORM) || check(SUM) || check(SORT) || check(TAKE))) {
@@ -201,11 +209,94 @@ internal fun Parser.canStartExprAtomAt(offset: Int): Boolean = when (peek(offset
     else -> false
 }
 
+/** Single-argument prose numeric builtins: `SQRT amount` etc. (spec §12.1). */
+private val PROSE_NUMERIC_UNARY = setOf("ABS", "SQRT", "SIGN", "FLOOR", "CEIL")
+
+/**
+ * Parse the English-prose forms of the numeric builtins (spec §12) and `SPLIT` (spec §11.2) —
+ * the same readability surface [parseProseStringOp] gives the string builtins (#v2). The
+ * `FUNC(args)` call form still works (a following `(` defers to [parsePrimary]); these add:
+ *   ABS x | SQRT x | SIGN x | FLOOR x | CEIL x          (unary)
+ *   ROUND x TO n [USING mode]                           (mode → ROUND-WITH-MODE)
+ *   TRUNCATE x TO n
+ *   MOD x BY y  |  POWER base BY exponent
+ *   MAX a, b[, …]  |  MIN a, b[, …]                     (comma-separated, ≥2 args)
+ *   SPLIT text BY delim [LIMIT n]                       (lowers to SPLIT(text, delim[, n]))
+ * Returns null when the tokens are not a prose builtin, so [parsePrimary] continues unchanged.
+ * Arguments parse at unary precedence so binary operators bind to the enclosing expression.
+ */
+internal fun Parser.parseProseNumericOp(): Expression? {
+    val p   = currentPos()
+    val tok = peek()
+
+    // ROUND is a keyword token (TokenType.ROUND), not an IDENTIFIER. Its call form `ROUND(x,n)`
+    // is left to parsePrimary (KEYWORD_BUILTINS) via the `(` guard.
+    // The head operand of a keyword-delimited form (`ROUND … TO`, `MOD … BY`, `MAX a , b`) is a
+    // full expression bounded by the delimiter keyword (spec shows `ROUND amount * rate TO 2`).
+    // The delimiters TO / BY / LIMIT / ',' are not infix operators, so parseExpression stops there.
+    if (tok.type == ROUND && peek(1).type != LPAREN && canStartExprAtomAt(1)) {
+        advance()  // ROUND
+        val x = parseExpression()
+        expect(TO, "Expected TO in `ROUND <value> TO <places>`")
+        val n = parseExpression()
+        return if (match(USING)) {
+            val mode = parseRoundingMode("USING")
+            BuiltinCall("ROUND-WITH-MODE", listOf(x, n, Literal(mode, LiteralKind.STRING, p)), p)
+        } else BuiltinCall("ROUND", listOf(x, n), p)
+    }
+
+    // Every other prose numeric builtin / SPLIT is spelled with an identifier name. A following
+    // `(` means the call form — defer. Lookahead is non-consuming until a form is certain.
+    if (tok.type != IDENTIFIER || peek(1).type == LPAREN || !canStartExprAtomAt(1)) return null
+    return when (tok.value) {
+        "TRUNCATE" -> {
+            advance(); val x = parseExpression()
+            expect(TO, "Expected TO in `TRUNCATE <value> TO <places>`")
+            BuiltinCall("TRUNCATE", listOf(x, parseExpression()), p)
+        }
+        "MOD" -> {
+            advance(); val x = parseExpression()
+            if (!matchKeywordValue("BY")) throw error("Expected BY in `MOD <value> BY <divisor>`")
+            BuiltinCall("MOD", listOf(x, parseExpression()), p)
+        }
+        "POWER" -> {
+            advance(); val base = parseExpression()
+            if (!matchKeywordValue("BY")) throw error("Expected BY in `POWER <base> BY <exponent>`")
+            BuiltinCall("POWER", listOf(base, parseExpression()), p)
+        }
+        "MAX", "MIN" -> {
+            // Exactly two operands — MAX/MIN lower to a 2-arg KobolMath call (`max(JJ)J` /
+            // `max(BD,BD)BD`); a 3rd arg would push an extra value the method can't consume.
+            val name = tok.value
+            advance()
+            val a = parseExpression()
+            if (!match(COMMA)) throw error("Expected ',' in `$name a, b`")
+            BuiltinCall(name, listOf(a, parseExpression()), p)
+        }
+        "SPLIT" -> {
+            advance(); val text = parseExpression()
+            if (!matchKeywordValue("BY")) throw error("Expected BY in `SPLIT <text> BY <delimiter>`")
+            val delim = parseExpression()
+            if (matchKeywordValue("LIMIT")) BuiltinCall("SPLIT", listOf(text, delim, parseExpression()), p)
+            else                            BuiltinCall("SPLIT", listOf(text, delim), p)
+        }
+        in PROSE_NUMERIC_UNARY -> {
+            val name = tok.value
+            advance()
+            BuiltinCall(name, listOf(parseUnaryExpr()), p)
+        }
+        else -> null
+    }
+}
+
 internal fun Parser.parsePrimary(): Expression {
         val p = currentPos()
 
         // Prose string builtins (spec §11) — UPPERCASE x, SUBSTRING x FROM..FOR.., FIND..IN.., COMBINE a b
         parseProseStringOp()?.let { return it }
+
+        // Prose numeric builtins + SPLIT (spec §12, §11.2) — SQRT x, ROUND x TO n, MOD x BY y, SPLIT … BY … (#v2)
+        parseProseNumericOp()?.let { return it }
 
         // Literals
         parseLiteral()?.let { return it }

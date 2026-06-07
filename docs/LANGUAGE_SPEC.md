@@ -1782,6 +1782,7 @@ It compiles to `java.util.UUID` on the JVM.
 type-spec  ::= ... | UUID
 uuid-expr  ::= UUID-GENERATE()
              | UUID-FROM-TEXT(string-expr)
+             | UUID-TO-TEXT(uuid-expr)
              | UUID-NIL()
 ```
 
@@ -1819,7 +1820,7 @@ END-IF
 DISPLAY transaction-id   -- "550e8400-e29b-41d4-a716-446655440000"
 
 -- String conversion for external systems:
-LET id-text = TEXT(transaction-id)
+LET id-text = UUID-TO-TEXT(transaction-id)
 ```
 
 **Built-in functions:**
@@ -1829,15 +1830,15 @@ LET id-text = TEXT(transaction-id)
 | `UUID-GENERATE()` | New random UUID (v4) |
 | `UUID-FROM-TEXT(expr)` | Parse UUID from `TEXT`; TypeChecker error if format cannot be verified at compile time |
 | `UUID-NIL()` | The nil UUID (`00000000-0000-0000-0000-000000000000`) |
-| `TEXT(uuid-expr)` | Convert UUID to its hyphenated string representation |
+| `UUID-TO-TEXT(uuid-expr)` | Convert UUID to its hyphenated string representation |
 
 **Type rules:**
 - `UUID` fields compare with `=` and `<>`; ordering operators (`<`, `>`) are not supported.
-- `UUID` is never implicitly coerced to or from `TEXT`; use `UUID-FROM-TEXT` and `TEXT()` explicitly.
+- `UUID` is never implicitly coerced to or from `TEXT`; use `UUID-FROM-TEXT` and `UUID-TO-TEXT` explicitly.
 - `TEXT SENSITIVE` can be combined with `UUID` for correlation IDs that must not appear in logs.
 
 **JVM mapping:** `UUID-GENERATE` → `java.util.UUID.randomUUID()`;
-`UUID-FROM-TEXT` → `java.util.UUID.fromString()`.
+`UUID-FROM-TEXT` → `java.util.UUID.fromString()`; `UUID-TO-TEXT` → `java.util.UUID.toString()`.
 
 ---
 

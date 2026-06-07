@@ -715,6 +715,16 @@ data class PipelineExpr(
     override val pos: SourcePosition,
 ) : Expression()
 
+/**
+ * List element indexing: `fields[1]` (spec §11.2). The index is **1-based** per the spec's
+ * `SPLIT` example (`fields[1]` is the first element); codegen subtracts 1 for `List.get`.
+ */
+data class IndexExpr(
+    val target: Expression,
+    val index: Expression,
+    override val pos: SourcePosition,
+) : Expression()
+
 sealed class PipelineStage {
     abstract val pos: SourcePosition
     data class FilterStage(val condition: Expression, override val pos: SourcePosition) : PipelineStage()

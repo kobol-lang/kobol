@@ -422,22 +422,28 @@ internal fun Parser.parseWithStatement(): Statement {
             else -> expectIdent("Expected precision name (DECIMAL32, DECIMAL64, DECIMAL128, UNLIMITED)")
         }
         // Optional: ROUNDING <mode> before the colon
-        val roundingMode = if (matchKeywordValue("ROUNDING")) {
-            when {
-                matchKeywordValue("HALF-EVEN") -> "HALF-EVEN"
-                matchKeywordValue("HALF-UP")   -> "HALF-UP"
-                matchKeywordValue("HALF-DOWN") -> "HALF-DOWN"
-                matchKeywordValue("UP")        -> "UP"
-                matchKeywordValue("DOWN")      -> "DOWN"
-                matchKeywordValue("CEILING")   -> "CEILING"
-                matchKeywordValue("FLOOR")     -> "FLOOR"
-                else -> expectIdent("Expected rounding mode after ROUNDING")
-            }
-        } else null
+        val roundingMode = if (matchKeywordValue("ROUNDING")) parseRoundingMode("ROUNDING") else null
         expect(COLON, "Expected ':' after precision name")
         val body = parseBlock()
         if (check(END_PRECISION)) advance()
         return WithPrecisionStatement(precisionName, roundingMode, body, p)
+    }
+
+    /**
+     * Parse a rounding-mode name (`HALF-EVEN`, `HALF-UP`, … `FLOOR`) into its canonical
+     * hyphenated string. Shared by the precision block (`ROUNDING <mode>`), the ROUND
+     * statement (`USING <mode>`), and the prose `ROUND x TO n USING <mode>` expression
+     * (#v2) so the accepted mode set can never diverge between sites (priority 1).
+     */
+    internal fun Parser.parseRoundingMode(after: String): String = when {
+        matchKeywordValue("HALF-EVEN") -> "HALF-EVEN"
+        matchKeywordValue("HALF-UP")   -> "HALF-UP"
+        matchKeywordValue("HALF-DOWN") -> "HALF-DOWN"
+        matchKeywordValue("UP")        -> "UP"
+        matchKeywordValue("DOWN")      -> "DOWN"
+        matchKeywordValue("CEILING")   -> "CEILING"
+        matchKeywordValue("FLOOR")     -> "FLOOR"
+        else -> expectIdent("Expected rounding mode after $after")
     }
 
     // CLOSE FileName
@@ -448,18 +454,7 @@ internal fun Parser.parseRoundStatement(): Statement {
         val target = parseReference()
         if (!match(TO)) throw error("Expected TO after ROUND target")
         val scale = parseExpression()
-        val mode = if (match(USING)) {
-            when {
-                matchKeywordValue("HALF-EVEN") -> "HALF-EVEN"
-                matchKeywordValue("HALF-UP")   -> "HALF-UP"
-                matchKeywordValue("HALF-DOWN") -> "HALF-DOWN"
-                matchKeywordValue("UP")        -> "UP"
-                matchKeywordValue("DOWN")      -> "DOWN"
-                matchKeywordValue("CEILING")   -> "CEILING"
-                matchKeywordValue("FLOOR")     -> "FLOOR"
-                else -> expectIdent("Expected rounding mode after USING")
-            }
-        } else null
+        val mode = if (match(USING)) parseRoundingMode("USING") else null
         return RoundStatement(target, scale, mode, p)
     }
 

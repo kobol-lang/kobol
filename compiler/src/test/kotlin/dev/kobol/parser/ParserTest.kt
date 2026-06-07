@@ -801,6 +801,113 @@ class ParserTest {
     }
 
     // -------------------------------------------------------------------------
+    // Prose numeric builtins + SPLIT (#v2) and list indexing (#v7)
+    // -------------------------------------------------------------------------
+
+    private fun computeExpr(src: String): Expression {
+        val prog = parse(src.trimIndent())
+        return assertIs<ComputeStatement>(prog.procedures[0].body[0]).expr
+    }
+
+    @Test fun `prose ROUND TO lowers to ROUND builtin`() {
+        val e = computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = ROUND amount TO 2
+        """)
+        val call = assertIs<BuiltinCall>(e)
+        assertEquals("ROUND", call.name)
+        assertEquals(2, call.args.size)
+    }
+
+    @Test fun `prose ROUND TO USING lowers to ROUND-WITH-MODE`() {
+        val call = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = ROUND amount TO 2 USING HALF-UP
+        """))
+        assertEquals("ROUND-WITH-MODE", call.name)
+        assertEquals(3, call.args.size)
+        val mode = assertIs<Literal>(call.args[2])
+        assertEquals("HALF-UP", mode.value)
+    }
+
+    @Test fun `prose ROUND head is a full expression up to TO`() {
+        // `ROUND base * pct TO 2` — the value before TO must be `base * pct`, not just `base`.
+        val call = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = ROUND base * pct TO 2
+        """))
+        assertEquals("ROUND", call.name)
+        assertIs<BinaryExpr>(call.args[0])
+    }
+
+    @Test fun `prose MOD BY and POWER BY lower to builtins`() {
+        val mod = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = MOD total BY divisor
+        """))
+        assertEquals("MOD", mod.name); assertEquals(2, mod.args.size)
+        val pow = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = POWER base BY exponent
+        """))
+        assertEquals("POWER", pow.name); assertEquals(2, pow.args.size)
+    }
+
+    @Test fun `prose MAX takes exactly two comma operands`() {
+        val mx = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = MAX a, b
+        """))
+        assertEquals("MAX", mx.name); assertEquals(2, mx.args.size)
+    }
+
+    @Test fun `prose SQRT unary still binds outer operator`() {
+        // `SQRT x + 1` → `SQRT(x) + 1`, mirroring the prose-string LENGTH precedent.
+        val e = computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = SQRT x + 1
+        """)
+        val add = assertIs<BinaryExpr>(e)
+        assertEquals(BinaryOp.ADD, add.op)
+        assertEquals("SQRT", assertIs<BuiltinCall>(add.left).name)
+    }
+
+    @Test fun `prose SPLIT BY with LIMIT lowers to SPLIT builtin`() {
+        val s = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = SPLIT line BY "," LIMIT 3
+        """))
+        assertEquals("SPLIT", s.name); assertEquals(3, s.args.size)
+    }
+
+    @Test fun `the call form still parses after adding prose forms`() {
+        val call = assertIs<BuiltinCall>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = ROUND(amount, 2)
+        """))
+        assertEquals("ROUND", call.name); assertEquals(2, call.args.size)
+    }
+
+    @Test fun `list index parses to IndexExpr`() {
+        val idx = assertIs<IndexExpr>(computeExpr("""
+            PROGRAM T
+            PROCEDURE M:
+              COMPUTE r = fields[1]
+        """))
+        assertEquals(listOf("FIELDS"), assertIs<Reference>(idx.target).parts)
+        assertEquals(1L, assertIs<Literal>(idx.index).value)
+    }
+
+    // -------------------------------------------------------------------------
     // PERFORM with arguments
     // -------------------------------------------------------------------------
 
