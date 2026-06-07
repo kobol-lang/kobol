@@ -2062,4 +2062,52 @@ class JvmIntegrationTest {
         assertTrue("outcome=remind" in out, "expected fall-through to second guard; got:\n$out")
         assertTrue("---done---" in out)
     }
+
+    // -------------------------------------------------------------------------
+    // #v10 — WITH PRECISION blocks: integer-literal precision + END-WITH terminator
+    // -------------------------------------------------------------------------
+
+    @Test fun `WITH PRECISION integer literal and ROUNDING with END-WITH terminator (v10)`() {
+        // Spec §12.4's marquee form: an integer-literal precision, an explicit ROUNDING
+        // mode, and the END-WITH terminator. PRECISION 5 caps the division at 5 significant
+        // digits, so 10.0 / 3 = 3.3333 — whereas outside any block the divide keeps the
+        // dividend's scale (10.0 → 3.3). The 5-sig-digit result proves MathContext applied.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : DECIMAL(20,10) = 10.0
+              q : DECIMAL(20,10) = 0.0
+            PROCEDURE Main:
+              WITH PRECISION 5 ROUNDING HALF-UP:
+                COMPUTE q = a / 3
+              END-WITH
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=3.3333" in out, "PRECISION 5 → 10.0/3 = 3.3333; got:\n$out")
+        assertTrue("3.33333" !in out, "PRECISION 5 must cap at 5 sig digits (no 3.33333…); got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `WITH PRECISION named preset closes with the spec END-WITH terminator (v10)`() {
+        // The named-preset form must also close with the spec's END-WITH (formerly only
+        // END-PRECISION was accepted — #v10). DECIMAL128 = 34 sig digits, so 10.0/3 keeps
+        // many threes (vs the dividend-scale 3.3 with no context).
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : DECIMAL(20,15) = 10.0
+              q : DECIMAL(20,15) = 0.0
+            PROCEDURE Main:
+              WITH PRECISION DECIMAL128:
+                COMPUTE q = a / 3
+              END-WITH
+              DISPLAY "q={q}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("q=3.333333333333333" in out, "DECIMAL128 keeps many threes; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
 }

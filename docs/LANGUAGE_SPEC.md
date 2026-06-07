@@ -70,27 +70,27 @@ DIVIDE          DO              EACH            ELSE            END-CONCURRENT
 END-CONFIG      END-FOR         END-IF          END-MATCH       END-MODULE
 END-PERFORM     END-PRECISION   END-PROCEDURE   END-PROGRAM     END-RECORD
 END-SERVER      END-TEST        END-TRY         END-VALIDATE    END-VARIANT
-END-WHILE       ENDPOINT        ENSURE          ERROR           EXCEPT
-EXPIRES         EXPORT          EXTEND          FALSE           FILES
-FILTER          FIND            FOR             FROM            FUTURE
-GET             GIVING          HEADERS         IF              IMPORT
-IN              INFO            INPUT           INTEGER         INTO
-IS              KEY             LABEL           LET             LIST
-LOG             MAP             MATCH           MILLISECONDS    MINUTES
-MOCK            MODULE          MONEY           MOVE            MULTIPLY
-MUST            NEW             NOSQL           NOT             OF
-ON              OPEN            OR              OTHERWISE       OUTPUT
-PARALLEL        PARAMS          PARSE           PERFORM         PORT
-PRECISION       PROCEDURE       PROGRAM         PUT             RAISE
-READ            RECORD          REPEAT          RESPOND         RETURN
-RETURNING       ROUND           RUN             SAVE            SECONDS
-SENSITIVE       SERVER          SET             SLEEP           SMALLINT
-SORT            STATUS          STOP            SUBTRACT        SUM
-TAKE            TEST            TEXT            TIME            TIMEOUT
-TIMES           TO              TRACE           TRANSFORM       TRUE
-TRY             USING           UUID            VALIDATE        VARIANT
-VERSION         WAIT            WARN            WHEN            WHERE
-WHILE           WITH            WRITE
+END-WHILE       END-WITH        ENDPOINT        ENSURE          ERROR
+EXCEPT          EXPIRES         EXPORT          EXTEND          FALSE
+FILES           FILTER          FIND            FOR             FROM
+FUTURE          GET             GIVING          HEADERS         IF
+IMPORT          IN              INFO            INPUT           INTEGER
+INTO            IS              KEY             LABEL           LET
+LIST            LOG             MAP             MATCH           MILLISECONDS
+MINUTES         MOCK            MODULE          MONEY           MOVE
+MULTIPLY        MUST            NEW             NOSQL           NOT
+OF              ON              OPEN            OR              OTHERWISE
+OUTPUT          PARALLEL        PARAMS          PARSE           PERFORM
+PORT            PRECISION       PROCEDURE       PROGRAM         PUT
+RAISE           READ            RECORD          REPEAT          RESPOND
+RETURN          RETURNING       ROUND           RUN             SAVE
+SECONDS         SENSITIVE       SERVER          SET             SLEEP
+SMALLINT        SORT            STATUS          STOP            SUBTRACT
+SUM             TAKE            TEST            TEXT            TIME
+TIMEOUT         TIMES           TO              TRACE           TRANSFORM
+TRUE            TRY             USING           UUID            VALIDATE
+VARIANT         VERSION         WAIT            WARN            WHEN
+WHERE           WHILE           WITH            WRITE
 ```
 
 ### 1.5 Literals

@@ -513,6 +513,19 @@ class TypeCheckerTest {
         END-PROCEDURE
     """.trimIndent())
 
+    @Test fun `WITH PRECISION integer literal and END-WITH terminator is clean (v10)`() = expectClean("""
+        PROGRAM T
+        DATA:
+          x : DECIMAL(18,8) = 1.5
+          y : DECIMAL(18,8) = 0
+        PROCEDURE Main:
+          WITH PRECISION 34 ROUNDING HALF-EVEN:
+            COMPUTE y = x * 3
+          END-WITH
+          STOP RUN
+        END-PROCEDURE
+    """.trimIndent())
+
     @Test fun `PARSE JSON AS type annotation is clean`() = expectClean("""
         PROGRAM T
         RECORD Invoice FIELDS

@@ -172,6 +172,24 @@ class ParserTest {
         assertIs<BinaryExpr>(stmt.expr)
     }
 
+    // #v10: an integer-literal precision (spec §12.4 `WITH PRECISION 34`) parses, the
+    // numeric text is carried as precisionName, and the spec's END-WITH terminator closes
+    // the block (alias of END-PRECISION).
+    @Test fun `WITH PRECISION integer literal and END-WITH parses (v10)`() {
+        val prog = parse("""
+            PROGRAM T
+            PROCEDURE M:
+              WITH PRECISION 34 ROUNDING HALF-EVEN:
+                COMPUTE y = x * 3
+              END-WITH
+            END-PROCEDURE
+        """.trimIndent())
+        val stmt = assertIs<WithPrecisionStatement>(prog.procedures[0].body[0])
+        assertEquals("34", stmt.precisionName)
+        assertEquals("HALF-EVEN", stmt.roundingMode)
+        assertEquals(1, stmt.body.size)
+    }
+
     @Test fun `LET with type annotation creates LocalVarDecl`() {
         val prog = parse("""
             PROGRAM T

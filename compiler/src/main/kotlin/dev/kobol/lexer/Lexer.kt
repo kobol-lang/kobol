@@ -441,6 +441,7 @@ class Lexer(
             "MATCH" to TokenType.MATCH, "OTHERWISE" to TokenType.OTHERWISE,
             "PARSE" to TokenType.PARSE, "PRECISION" to TokenType.PRECISION,
             "END-PRECISION" to TokenType.END_PRECISION,
+            "END-WITH" to TokenType.END_PRECISION,   // spec §12.4 terminator; alias of END-PRECISION
             "VARIANT" to TokenType.VARIANT, "SENSITIVE" to TokenType.SENSITIVE,
             "END-CONFIG" to TokenType.END_CONFIG, "END-VALIDATE" to TokenType.END_VALIDATE,
             "END-MATCH" to TokenType.END_MATCH, "END-VARIANT" to TokenType.END_VARIANT,

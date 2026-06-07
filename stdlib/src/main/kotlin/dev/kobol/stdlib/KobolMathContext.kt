@@ -47,12 +47,17 @@ object KobolMathContext {
         }
     }
 
-    private fun nameToContext(name: String): MathContext = when (name.uppercase()) {
-        "DECIMAL32"  -> MathContext.DECIMAL32
-        "DECIMAL64"  -> MathContext.DECIMAL64
-        "DECIMAL128" -> MathContext.DECIMAL128
-        "UNLIMITED"  -> MathContext.UNLIMITED
-        else         -> MathContext.DECIMAL128   // safe default for unknown names
+    private fun nameToContext(name: String): MathContext {
+        // Spec §12.4: an integer-literal precision (e.g. WITH PRECISION 34) maps to
+        // MathContext(n) with the default HALF_EVEN rounding; 0 means UNLIMITED.
+        name.toIntOrNull()?.let { return if (it == 0) MathContext.UNLIMITED else MathContext(it) }
+        return when (name.uppercase()) {
+            "DECIMAL32"  -> MathContext.DECIMAL32
+            "DECIMAL64"  -> MathContext.DECIMAL64
+            "DECIMAL128" -> MathContext.DECIMAL128
+            "UNLIMITED"  -> MathContext.UNLIMITED
+            else         -> MathContext.DECIMAL128   // safe default for unknown names
+        }
     }
 
     private fun nameToContextWithRounding(name: String, mode: String): MathContext {
@@ -67,7 +72,7 @@ object KobolMathContext {
             "UNNECESSARY" -> RoundingMode.UNNECESSARY
             else          -> throw IllegalArgumentException("Unknown rounding mode: $mode")
         }
-        val precision = when (name.uppercase()) {
+        val precision = name.toIntOrNull() ?: when (name.uppercase()) {
             "DECIMAL32"  -> MathContext.DECIMAL32.precision
             "DECIMAL64"  -> MathContext.DECIMAL64.precision
             "DECIMAL128" -> MathContext.DECIMAL128.precision

@@ -415,11 +415,12 @@ internal fun Parser.parseWithStatement(): Statement {
         }
         if (peek().type == PRECISION) advance()
         val precisionName = when {
+            check(INTEGER_LIT)              -> advance().value   // spec §12.4: WITH PRECISION 34 …
             matchKeywordValue("DECIMAL32")  -> "DECIMAL32"
             matchKeywordValue("DECIMAL64")  -> "DECIMAL64"
             matchKeywordValue("DECIMAL128") -> "DECIMAL128"
             matchKeywordValue("UNLIMITED")  -> "UNLIMITED"
-            else -> expectIdent("Expected precision name (DECIMAL32, DECIMAL64, DECIMAL128, UNLIMITED)")
+            else -> expectIdent("Expected precision: an integer literal or DECIMAL32, DECIMAL64, DECIMAL128, UNLIMITED")
         }
         // Optional: ROUNDING <mode> before the colon
         val roundingMode = if (matchKeywordValue("ROUNDING")) parseRoundingMode("ROUNDING") else null
