@@ -176,9 +176,16 @@ See the [**Kobol** Language Specification](docs/LANGUAGE_SPEC.md) for the full l
 
 ## Licensing
 
-**Kobol** is made available under two licenses:
+The **Kobol** software (compiler, runtime, standard library, Gradle plugin, and
+VS Code extension) is made available under your choice of two licenses:
 
 - [Apache License 2.0](LICENSE)
 - [Eclipse Public License 2.0](LICENSE-EPL-2.0.txt)
 
-Both license texts are included in this repository. Choose the license that best fits your use.
+Both texts are included in this repository; choose the one that best fits your use.
+Derivative works must retain the [NOTICE](NOTICE) file (Apache 2.0 §4).
+
+The **documentation** under [`docs/`](docs/) — including the
+[Language Specification](docs/LANGUAGE_SPEC.md) — is licensed separately under the
+[Creative Commons Attribution 4.0 International License (CC-BY-4.0)](docs/LICENSE):
+reuse and adaptation are permitted **with attribution** to The Kobol Project.

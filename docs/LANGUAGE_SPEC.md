@@ -1,3 +1,20 @@
+<!--
+  Kobol Language Specification
+  SPDX-License-Identifier: CC-BY-4.0
+  Copyright 2026 The Kobol Project.
+
+  Canonical source of truth: https://github.com/kobol-lang/kobol (docs/LANGUAGE_SPEC.md)
+  Published reference:        https://kobol-lang.org/spec
+  Spec version:               Draft v0.1
+
+  This specification text is licensed under the Creative Commons Attribution 4.0
+  International License (CC-BY-4.0): https://creativecommons.org/licenses/by/4.0/
+  See docs/LICENSE. Reuse and adaptation are permitted with attribution to The
+  Kobol Project; attribution must not imply endorsement or affiliation.
+
+  The Kobol compiler and tooling (all source outside docs/) are licensed
+  separately under Apache-2.0 OR EPL-2.0 — see /LICENSE and /LICENSE-EPL-2.0.txt.
+-->
 <p align="center">
   <img src="../assets/logo.svg" alt="" width="120">
 </p>
@@ -6,6 +23,12 @@
 </p>
 
 # Language Specification (Draft v0.1)
+
+> **About the examples.** Many ` ```kobol ` blocks below are *fragments* shown for
+> illustration and are not complete, compilable programs. Blocks that are full programs
+> (they begin with a `PROGRAM` header) are compiled in CI by `SpecExamplesCompileTest`,
+> so they cannot rot. To enroll a script-mode example (no `PROGRAM` header) in that gate,
+> make its first line `-- @compile`.
 
 ## 1. Lexical Structure
 
@@ -30,22 +53,44 @@ Valid:   `CUSTOMER-NAME`, `invoice-count`, `tax-rate-2024`
 Invalid: `-name`, `name-`, `3rd-field`
 
 ### 1.4 Keywords (Reserved)
+
+> This list is generated from the lexer's keyword table (`Lexer.KEYWORDS`) and is
+> verified in CI by `KeywordSpecSyncTest` — it cannot silently drift from the compiler.
+> Every word below is reserved and may not be used as an identifier (`PROGRAM` name,
+> variable, procedure, etc.). Multi-word terminators (`END-IF`, …) are single tokens.
+
 ```
-ADD          ALL          AND          AS           BOOLEAN
-CALL         CLOSE        COBALT       COMPUTE      CONDITION
-DATA         DATE         DATETIME     DECIMAL      DEFINE
-DISPLAY      DIVIDE       ELSE         END-FOR      END-IF
-END-PERFORM  END-PROCEDURE END-PROGRAM END-RECORD   END-TRY
-END-WHILE    ENSURE       EXCEPT       FALSE        FILTER
-FOR          FROM         GIVING       IF           IMPORT
-IN           INTEGER      INTO         IS           LIST
-MAP          MONEY        MOVE         MULTIPLY     NOT
-OF           ON           OPEN         OR           PERFORM
-PROGRAM      RAISE        RECORD       REPEAT       RETURN
-RETURNING    SET          SMALLINT     STOP         SUBTRACT
-SUM          TEXT         TIME         TIMES        TO
-TRANSFORM    TRUE         TRY          USING        UUID
-VERSION      WHERE        WHILE        WITH         WRITE
+ADD             ALL             AND             AS              ASSERT
+ASYNC           AT              AUTHOR          AWAIT           BODY
+BOOLEAN         CACHE           CALL            CLOSE           COMBINE
+COMPUTE         CONCURRENT      CONDITION       CONFIG          COUNT
+DATA            DATABASE        DATE            DATETIME        DEBUG
+DECIMAL         DEFINE          DELETE          DEPRECATED      DISPLAY
+DIVIDE          DO              EACH            ELSE            END-CONCURRENT
+END-CONFIG      END-FOR         END-IF          END-MATCH       END-MODULE
+END-PERFORM     END-PRECISION   END-PROCEDURE   END-PROGRAM     END-RECORD
+END-SERVER      END-TEST        END-TRY         END-VALIDATE    END-VARIANT
+END-WHILE       ENDPOINT        ENSURE          ERROR           EXCEPT
+EXPIRES         EXPORT          EXTEND          FALSE           FILES
+FILTER          FIND            FOR             FROM            FUTURE
+GET             GIVING          HEADERS         IF              IMPORT
+IN              INFO            INPUT           INTEGER         INTO
+IS              KEY             LABEL           LET             LIST
+LOG             MAP             MATCH           MILLISECONDS    MINUTES
+MOCK            MODULE          MONEY           MOVE            MULTIPLY
+MUST            NEW             NOSQL           NOT             OF
+ON              OPEN            OR              OTHERWISE       OUTPUT
+PARALLEL        PARAMS          PARSE           PERFORM         PORT
+PRECISION       PROCEDURE       PROGRAM         PUT             RAISE
+READ            RECORD          REPEAT          RESPOND         RETURN
+RETURNING       ROUND           RUN             SAVE            SECONDS
+SENSITIVE       SERVER          SET             SLEEP           SMALLINT
+SORT            STATUS          STOP            SUBTRACT        SUM
+TAKE            TEST            TEXT            TIME            TIMEOUT
+TIMES           TO              TRACE           TRANSFORM       TRUE
+TRY             USING           UUID            VALIDATE        VARIANT
+VERSION         WAIT            WARN            WHEN            WHERE
+WHILE           WITH            WRITE
 ```
 
 ### 1.5 Literals
@@ -179,6 +224,19 @@ RECORD Employee:
   salary      : MONEY(10.2)
 ```
 
+**Value semantics.** A record is a value, not a shared handle. Storing a record into
+any holder — another record variable (`MOVE rec TO rec`), a `LIST` element
+(`ADD rec TO list`), a `MAP` value (`PUT rec TO map`), a record-typed field of a
+record literal (`Box { it: rec }`), or a record-typed field of a `VARIANT` case
+(`Full(rec)`) — stores an independent **copy** of that record, so later mutation of the
+source record's own fields never leaks into the stored value (and vice-versa).
+
+The copy is **deep**: a record-typed *field* of the copied record is itself copied
+recursively, at every level. Mutating a source's nested record (e.g. `a.inner.f` after
+`MOVE a TO b`) never affects the stored copy. Scalars, `TEXT`, and `DECIMAL`/`MONEY`
+values are immutable, so they need no copy. A field left uninitialized (null) stays null
+through the copy.
+
 ### 4.3 Condition Declarations (Named Boolean Conditions)
 
 Inspired by COBOL's 88-level items:
@@ -263,8 +321,8 @@ END-PROCEDURE
 ```
 
 Type aliases are resolved at compile time — `ExchangeRate` is identical to
-`DECIMAL(18,8)` in all type-checking rules. They may be exported from modules
-(Phase 12): `EXPORT TYPE ExchangeRate`.
+`DECIMAL(18,8)` in all type-checking rules. They may be exported from modules:
+`EXPORT TYPE ExchangeRate`.
 
 ---
 
@@ -293,14 +351,37 @@ to their defaults if no value is given:
 | Type | Default Value |
 |------|--------------|
 | `INTEGER`, `SMALLINT` | `0` |
-| `DECIMAL`, `MONEY` | `0` |
+| `DECIMAL`, `MONEY` | `0` (see note on scale below) |
 | `TEXT`, `TEXT(n)` | `""` (empty / spaces for fixed) |
 | `BOOLEAN` | `FALSE` |
-| `DATE` | Current date at program start |
+| `DATE`, `TIME`, `DATETIME` | **No implicit default** — must be initialized explicitly |
 | `LIST OF T` | Empty list |
 | `MAP OF K TO V` | Empty map |
 | `UUID` | Nil UUID: `00000000-0000-0000-0000-000000000000` |
 | Record type | All fields at their defaults |
+
+> **Temporal types have no implicit default.** Earlier drafts promised "current date at
+> program start" for an uninitialized `DATE`. That was COBOL-style hidden state (§1.7) and
+> the value was actually `null`, NPE-ing on first use. Initialize temporal fields explicitly,
+> e.g. `started : DATE = TODAY`. The compiler emits warning `W019` at the declaration site
+> for any uninitialized `DATE`/`TIME`/`DATETIME`.
+>
+> The same `W019` fires for an uninitialized `JAVA-OBJECT` field (an imported class held in a
+> DATA field, §8.11) — it also defaults to `null`. Beyond the first-use NPE, passing such a null
+> into a Kotlin **non-null** parameter fails that callee's entry `null`-check immediately.
+> Initialize it, e.g. `buf : SB = NEW SB`.
+
+> **Decimal default scale.** A `DECIMAL`/`MONEY` default zero is *stored* as `0` (scale 0), the
+> same value an explicit `= 0` produces — the declared scale is a *precision budget* for the
+> stored value, not a storage normalization. No precision is lost: `BigDecimal` retains full
+> precision and arithmetic uses max-scale semantics.
+>
+> **Decimal display scale.** `DISPLAY` and string interpolation render a `DECIMAL`/`MONEY` at its
+> **declared scale**, zero-padding when the value carries fewer fraction digits — an uninitialized
+> `DECIMAL(18,8)` (and an explicit `= 0`) DISPLAYs as `0.00000000`, and `DECIMAL(18,8) = 1.5` as
+> `1.50000000`. This is presentation only; the stored value is unchanged. Padding is **one-way**:
+> a value that carries *more* fraction digits than the declared scale is shown in full and is
+> never rounded down, so `DISPLAY` can never hide stored precision.
 
 ---
 
@@ -418,6 +499,28 @@ PERFORM ValidateRecord
 PERFORM ApplyDiscount USING current-invoice, 10.0
 ```
 
+**Capturing a return value.** `PERFORM` is a statement and does not bind a result.
+To capture the value a procedure `RETURN`s, call it as an expression:
+
+```kobol
+COMPUTE tax-due = CalculateTax(invoice.amount)
+COMPUTE tax-due = Utils.CalculateTax(invoice.amount)   -- module-qualified
+```
+
+A `GIVING` clause on `PERFORM` is reserved for `ASYNC` procedures, where it binds the
+`FUTURE OF T` handle (see §18.4). Using `GIVING` on a synchronous `PERFORM` is an error
+(`E215`); use expression-call capture instead.
+
+This works identically for a **module-qualified** async `PERFORM`: the captured
+`FUTURE OF T` is awaited the same way, with no cross-module restriction.
+
+```kobol
+PERFORM Jobs.Fetch USING 21 GIVING fut   -- fut : FUTURE OF INTEGER
+AWAIT fut INTO result                    -- result = 42
+```
+
+A non-`FUTURE` `GIVING` target is an error (`E216`).
+
 ### 8.6 IF / ELSE / END-IF
 
 ```
@@ -508,6 +611,168 @@ CALL LocalDate.now GIVING today
 CALL CustRepo.save WITH current-customer
 CALL System.currentTimeMillis GIVING start-time
 ```
+
+For a **static** interop `CALL`, an **instance** call on a typed receiver (`TEXT`,
+`DECIMAL`/`MONEY`, `DATE`/`TIME`/`DATETIME`, `LIST`, `MAP`, `UUID` — mapped to `String`,
+`BigDecimal`, the `java.time` types, `List`/`Map`/`UUID`), **and** an instance call on a
+`JAVA-OBJECT` produced by `NEW` (whose concrete class is carried from the `NEW` site), the compiler
+reads the owner class off the compile classpath and links to the method's real signature: an
+overloaded target is resolved by ranking candidates on argument-coercion cost (e.g. an `INTEGER`
+arg widens to a `long`/`double` parameter), and the method's real return type is captured into the
+`GIVING` target (e.g. a `double` result lands in a `DECIMAL`, an `int` result widens into an
+`INTEGER`). A **varargs** method is matched too — the trailing arguments are packed into its array
+parameter (reference element types). When the class is unreadable, the overload set is genuinely
+ambiguous, or a needed coercion is unsupported, the compiler falls back to Kobol-side descriptor
+inference. Because Kobol `INTEGER` is a 64-bit `long`, an `INTEGER` argument passed to a Java method
+that takes an `int` parameter is narrowed via a **guarded** conversion (`Math.toIntExact`): an
+in-range value passes through, a value outside `int` range raises a clear `ArithmeticException` at
+run time — the narrowing is never silent. A `JAVA-OBJECT` also keeps its class **across a procedure
+boundary**: declare the holder — a `USING` parameter, a `RETURNING` type, or a `DATA` field — with
+an imported class name and the instance `CALL` resolves against that class wherever the object
+travels (see §8.11.3). The **`NEW` constructor** is resolved the same way (see §8.11.2).
+Primitive-element varargs (`int…`) use Kobol-side descriptor inference.
+
+#### 8.11.1 CALL as an expression
+
+A `CALL` may also appear in **expression** position — directly as the right-hand side of a
+`COMPUTE` or `LET`, or nested inside a larger expression — so an interop result can be used
+without a separate `GIVING` variable:
+
+```
+call-expression ::= CALL qualified-method-name (WITH argument-list)?
+```
+
+```kobol
+LET n = CALL Math.max WITH a, b           -- n is INTEGER (Math.max(long,long) → long)
+COMPUTE tail = CALL greeting.substring WITH 1
+COMPUTE doubled = (CALL Math.max WITH a, b) * 2
+```
+
+The method's **real return type** is read off the compile classpath at type-check time and becomes
+the static type of the expression — so `LET` infers the variable's type from it and a `COMPUTE`
+target is checked against it. This is resolved by the **same** machinery as the statement form, so
+the inferred type always matches the emitted call. A `CALL` to a **void** method, an unresolvable
+owner, or an overload set that is ambiguous for the given argument types is a **compile error** (it
+never type-checks clean only to fail when loaded). A trailing `WITH a, b` binds greedily into the
+argument list; wrap the call in parentheses to use its result inside a larger expression, as in
+`(CALL Math.max WITH a, b) * 2`. The reflective `alias.STATIC_FIELD.method` form is statement-only.
+
+#### 8.11.2 NEW (constructing a Java object)
+
+`NEW` constructs an instance of a classpath / 3rd-party class — the constructor counterpart
+to `CALL`. The owner is resolved the same way (`IMPORT` alias, stdlib path, `java.lang.*`, or
+fully-qualified name). The result is a `JAVA-OBJECT`; bind it with `LET` and use it as an
+instance receiver in a later `CALL`.
+
+```
+new-expression ::= NEW class-name (WITH argument-list)?
+```
+
+```kobol
+IMPORT "java.lang.StringBuilder" AS SB
+LET buf = NEW SB WITH "hello"      -- StringBuilder("hello")
+CALL buf.append WITH " world"
+LET empty = NEW SB                 -- no-argument constructor
+```
+
+Arguments are **positional**. The constructor is resolved against the **real class on the
+compile classpath** — the same classpath-aware machinery a `CALL` uses — so an overloaded or
+primitive-`int` constructor links correctly: a Kobol `INTEGER` (a 64-bit `long`) is narrowed
+into an `int` parameter through the same guarded `Math.toIntExact` conversion as `CALL`
+(narrowing is the last resort and never silent — it raises a clear `ArithmeticException` on a
+value outside `int` range). When the owner class cannot be read, or two constructors tie at the
+same coercion cost, `NEW` falls back to a descriptor inferred from the Kobol-side argument types
+(a string literal → `String`, an `INTEGER` → `long`). Named constructor arguments are not
+supported — use positional arguments.
+
+#### 8.11.3 An imported class as a declared type
+
+An `IMPORT` alias (or the simple imported class name) may be used as a **declared type** — for a
+`DATA` field, a `USING` parameter, or a `RETURNING` type. The holder is a `JAVA-OBJECT` that
+remembers its concrete class, so an instance `CALL` on it links to the real methods even after the
+object is passed to another procedure or returned from one (a local `LET x = NEW …` already carries
+its class within the same procedure; a declared type extends that across boundaries).
+
+```kobol
+IMPORT "java.lang.StringBuilder" AS SB
+
+PROCEDURE AppendWorld USING b : SB:
+  CALL b.append WITH "world"          -- b keeps its StringBuilder class here
+END-PROCEDURE
+
+PROCEDURE Main:
+  LET sb = NEW SB
+  CALL sb.append WITH "hello "
+  PERFORM AppendWorld USING sb        -- same object, class preserved across the call
+  CALL sb.toString GIVING result      -- "hello world"
+END-PROCEDURE
+```
+
+A real `RECORD`/`VARIANT` of the same name takes precedence over an import alias. Only a single
+identifier resolves this way — a dotted name (`java.time.LocalDate`) is not a type name, so import
+it under an alias first. The value's JVM representation is still erased to `Object`; the class is
+used for compile-time method resolution and a runtime cast, not stored in the field's descriptor.
+
+#### 8.11.4 Kotlin nullable returns (`W237`)
+
+Kobol has no `null`. When an interop `CALL` resolves to a **Kotlin** method whose return
+type is **nullable** (`T?`), the compiler decodes the class's Kotlin `@Metadata` off the compile
+classpath (a nullable `String?` and a non-null `String` erase to the *same* JVM descriptor, so the
+difference is visible only in the metadata) and emits warning **`W237`** at the call site — the
+result may be `null` and would surface as a `NullPointerException` only later, when used. Guard the
+source or call a non-null alternative. The warning covers both call forms — the `CALL` expression
+(`LET x = CALL …`) and the `CALL` statement that captures the return (`CALL … GIVING x`); a
+fire-and-forget `CALL` with no `GIVING` discards the value and does not warn. A Java/JDK method
+carries no Kotlin metadata, so it never trips this warning. The warning also covers top-level
+functions of a Kotlin library compiled to a *multifile-class facade* (the common `XxxKt` split
+across files — e.g. kotlin-stdlib `StringsKt`): the facade declares no API methods of its own and
+names only its part classes, so the compiler follows those names, reads each part's metadata, and
+resolves the function (and its nullability) from the part — whether the facade forwards to the part
+or, as in kotlin-stdlib, inherits from it. Single-file facades and ordinary class/companion methods
+are likewise covered. `suspend` functions are callable via the FUTURE bridge (§8.11.6). Parameter
+nullability is not surfaced.
+
+#### 8.11.5 Property accessors (`obj.field`)
+
+A field read on a `JAVA-OBJECT` whose concrete class is known — a value from `NEW`, or a parameter
+typed by an `IMPORT` alias — resolves to that property's getter off the compile classpath: a Kotlin
+`val/var foo: T` (or a Java bean property) exposes `getFoo()`/`isFoo()`, and `obj.foo` infers the
+real property type and emits the getter call. A nullable Kotlin property (`T?`) warns `W237` at the
+read site, exactly as a nullable method return does (§8.11.4). The match is case-insensitive, so the
+upper-cased Kobol identifier `obj.nickname` still binds the camelCase `getNickname`. A field on an
+*opaque* `JAVA-OBJECT` (one whose concrete class was erased crossing a procedure boundary without an
+alias type) is not resolvable this way and falls back to `TEXT`; read it with an explicit
+`CALL obj.getFoo` instead. Property *writes* (`MOVE x TO obj.field`) are not yet supported.
+
+#### 8.11.6 `suspend` functions (the FUTURE bridge)
+
+A Kotlin `suspend fun f(args): T` does not have the JVM shape it reads as in source — the compiler
+appends a hidden `kotlin.coroutines.Continuation` parameter and erases the return to `Object`, so it
+is really `f(args, Continuation)Object`. The compiler decodes the `isSuspend` flag from the class's
+Kotlin `@Metadata` and **bridges** the call into a `CompletableFuture`, so a `suspend` function is
+consumed through the ordinary `FUTURE`/`AWAIT` machinery — no new async surface:
+
+```kobol
+IMPORT "com.acme.Fetcher" AS Fetcher
+DATA:
+  fut  : FUTURE OF TEXT
+  name : TEXT
+PROCEDURE Main:
+  LET f = NEW Fetcher
+  CALL f.loadName WITH user-id GIVING fut   -- suspend fun loadName(id): String
+  AWAIT fut INTO name                        -- blocks until the coroutine completes
+```
+
+`CALL` supplies only the declared arguments; the `Continuation` is synthesised by the bridge. The
+result, **if captured**, must go to a `FUTURE OF T` target — a non-`FUTURE` `GIVING` is **`E237`**
+(it would store a `CompletableFuture` into the wrong slot and crash at run). A fire-and-forget
+`suspend CALL` (no `GIVING`) launches the work and discards the future, exactly like a fire-and-forget
+async `PERFORM`. A body that completes without actually suspending resolves the future immediately; a
+body that suspends resolves it when the coroutine resumes, and a thrown failure completes the future
+exceptionally (re-raised by `AWAIT`). **Limitations:** the bridge uses an empty coroutine context, so
+there is no structured-concurrency scope — cancellation, timeouts, and dispatcher selection are not
+modelled; a `suspend` function with a nullable return is not flagged `W237` (the erased `Object`
+return hides the metadata key); overload-ambiguous `suspend` targets fall back to the unresolved path.
 
 ### 8.12 RAISE
 Throws an exception.
@@ -844,9 +1109,7 @@ type of the collection.
 
 ```kobol
 ADD invoice TO invoice-list               -- append
-ADD invoice TO invoice-list AT FIRST      -- prepend
-REMOVE invoice FROM invoice-list
-COMPUTE count = LENGTH invoice-list
+COMPUTE count = LENGTH invoice-list       -- element count (also: invoice-list.LENGTH)
 
 -- Pipeline operations
 COMPUTE unpaid-total =
@@ -862,14 +1125,19 @@ COMPUTE top-invoices =
     TAKE 10
 ```
 
+> `LIST` has no prepend (`ADD … AT FIRST`) or element-removal (`REMOVE … FROM <list>`)
+> operator; both are rejected at compile time, not silently accepted. Use `ADD` (append)
+> or pipeline operations.
+
 ### 13.2 MAP Operations
 
 ```kobol
 PUT "active" TO status-map WITH KEY "A"
 GET status-map KEY "A" INTO description
-REMOVE status-map KEY "D"
-COMPUTE map-size = LENGTH status-map
+COMPUTE map-size = LENGTH status-map      -- entry count (also: status-map.LENGTH)
 ```
+
+> `MAP` has no key-removal (`REMOVE <map> KEY k`) operator; it is rejected at compile time.
 
 ---
 
@@ -899,7 +1167,7 @@ END-MODULE
 IMPORT billing-utils.BillingUtils AS Utils
 
 PROCEDURE ProcessInvoice:
-  PERFORM Utils.CalculateTax USING invoice.amount GIVING tax-due
+  COMPUTE tax-due = Utils.CalculateTax(invoice.amount)
   ADD tax-due TO invoice.amount
 END-PROCEDURE
 ```
@@ -974,8 +1242,8 @@ PROCEDURE ProcessAllInvoices:
   MOVE 0 TO billing-result.total-invoices
   MOVE 0 TO billing-result.total-amount
   OPEN InvoiceFile FOR INPUT
-  FOR EACH record IN InvoiceFile:
-    MOVE record TO current-invoice
+  FOR EACH inv-record IN InvoiceFile:
+    MOVE inv-record TO current-invoice
     PERFORM ProcessSingleInvoice
   END-FOR
 END-PROCEDURE
@@ -999,8 +1267,7 @@ END-PROCEDURE
 PROCEDURE ApplyLateFee:
   COMPUTE late-fee = current-invoice.amount * LATE-FEE-RATE / 100
   ADD late-fee TO current-invoice.amount
-  DISPLAY "Late fee applied to invoice " current-invoice.invoice-id
-         ": " late-fee
+  DISPLAY "Late fee applied to invoice " current-invoice.invoice-id ": " late-fee
 END-PROCEDURE
 
 PROCEDURE WriteReport:
@@ -1103,10 +1370,29 @@ DISPLAY "Tax ({TAX-RATE}%): ${amount * TAX-RATE / 100}"
 DISPLAY "Status: {IF paid THEN \"Paid\" ELSE \"Unpaid\"}"
 ```
 
+**Nested string literals inside `{…}`.** An interpolation body is a full expression, so it
+may contain its own string literals. Write them either with plain quotes or, since the
+whole literal already sits inside `"…"`, with escaped quotes `\"…\"` — both lex identically:
+```kobol
+DISPLAY "val {UPPERCASE "hi"}"          -- plain quotes
+DISPLAY "val {UPPERCASE \"hi\"}"        -- escaped quotes — same result
+```
+
 Interpolation also works in `COMPUTE` assignments:
 ```kobol
 COMPUTE subject-line = "Overdue notice: Invoice {invoice-id} — {customer-name}"
 ```
+
+**Literal braces — `\{` and `\}`.** Because `{` always opens an interpolation, write a
+literal brace with the escapes `\{` and `\}`. This is the escape hatch for JSON literals
+and regex `{n,m}` quantifiers:
+```kobol
+LET payload = "\{\"id\":{invoice-id}\}"          -- → {"id":42}
+VALIDATE code MUST MATCH "[A-Z0-9]\{8,20\}"      -- literal regex quantifier
+```
+The full escape set inside a `"…"` string is `\n`, `\t`, `\\`, `\"`, `\{`, `\}`. A bare
+`{` still starts interpolation (backward-compatible). Single-quoted raw strings (`'…'`)
+never interpolate, so braces there are already literal.
 
 ---
 
@@ -1483,8 +1769,7 @@ warning), so they show up in build output and can be gated in CI:
 -- FIXME: O(n^2) here, switch to a MAP
 ```
 
-**Status:** ✅ Implemented — the lexer skips `NOTE:` blocks and emits tag diagnostics
-before token emission. The legacy `/* */` form is no longer supported.
+The legacy C-style `/* */` block-comment form is not part of the language.
 
 ---
 
@@ -1495,10 +1780,14 @@ It compiles to `java.util.UUID` on the JVM.
 
 ```
 type-spec  ::= ... | UUID
-uuid-expr  ::= UUID-GENERATE
-             | UUID-FROM-TEXT string-expr
-             | UUID-NIL
+uuid-expr  ::= UUID-GENERATE()
+             | UUID-FROM-TEXT(string-expr)
+             | UUID-NIL()
 ```
+
+> UUID generators/parsers are builtin **functions** and use call syntax with parentheses
+> (`UUID-GENERATE()`), consistent with all other builtins. A bare `UUID-GENERATE` is an
+> undefined name.
 
 **Declaration and usage:**
 ```kobol
@@ -1508,10 +1797,10 @@ DATA:
 
 PROCEDURE StartTransaction:
   -- Generate a new random UUID (v4):
-  LET transaction-id = UUID-GENERATE
+  LET transaction-id = UUID-GENERATE()
 
   -- Parse a UUID from an externally supplied string:
-  LET correlation-id = UUID-FROM-TEXT request-header-id
+  LET correlation-id = UUID-FROM-TEXT(request-header-id)
 
   LOG INFO "Transaction started" WITH
     tx-id  : transaction-id
@@ -1521,8 +1810,8 @@ END-PROCEDURE
 
 **Comparison and display:**
 ```kobol
--- UUIDs compare with = and <> (lexicographic on string form):
-IF transaction-id <> UUID-NIL:
+-- UUIDs compare with = and <> (by value, via java.util.UUID.equals):
+IF transaction-id <> UUID-NIL():
   DO ProcessTransaction USING transaction-id
 END-IF
 
@@ -1537,9 +1826,9 @@ LET id-text = TEXT(transaction-id)
 
 | Expression | Result |
 |------------|--------|
-| `UUID-GENERATE` | New random UUID (v4) |
-| `UUID-FROM-TEXT expr` | Parse UUID from `TEXT`; TypeChecker error if format cannot be verified at compile time |
-| `UUID-NIL` | The nil UUID (`00000000-0000-0000-0000-000000000000`) |
+| `UUID-GENERATE()` | New random UUID (v4) |
+| `UUID-FROM-TEXT(expr)` | Parse UUID from `TEXT`; TypeChecker error if format cannot be verified at compile time |
+| `UUID-NIL()` | The nil UUID (`00000000-0000-0000-0000-000000000000`) |
 | `TEXT(uuid-expr)` | Convert UUID to its hyphenated string representation |
 
 **Type rules:**
@@ -1549,8 +1838,6 @@ LET id-text = TEXT(transaction-id)
 
 **JVM mapping:** `UUID-GENERATE` → `java.util.UUID.randomUUID()`;
 `UUID-FROM-TEXT` → `java.util.UUID.fromString()`.
-
-**Status:** 🔲 Roadmap (lexer keyword reserved; stdlib and emitter implementation pending).
 
 ---
 
@@ -1614,13 +1901,9 @@ COMPUTE stored-precision = PRECISION OF rate      -- total significant digits
 The `SUM` pipeline stage over `LIST OF DECIMAL` or `LIST OF MONEY` uses
 `BigDecimal.add` — no lossy `doubleValue()` conversion at any point.
 
-**Status:** Core `DECIMAL`/`MONEY` types and `HALF-EVEN` arithmetic are ✅ implemented.
-Extended rounding modes (`ROUND ... USING mode`), `SCALE OF`, `PRECISION OF`,
-`WITH PRECISION` context blocks, and exact BigDecimal `SUM` pipeline are 🔲 Roadmap.
-
 ---
 
-## 18. Concurrency  ✅ Implemented (Phase 10)
+## 18. Concurrency
 
 **Kobol** concurrency is backed by **JVM virtual threads** (Project Loom, standard since Java 21).
 Programs look synchronous; the runtime executes concurrent branches on lightweight virtual
@@ -1683,14 +1966,22 @@ ASYNC PROCEDURE FetchExchangeRate USING currency : TEXT RETURNING DECIMAL:
 END-PROCEDURE
 
 PROCEDURE ConvertAmount:
-  LET rate-task = ASYNC DO FetchExchangeRate USING "EUR"
+  DATA:
+    rate-task : FUTURE OF DECIMAL
+    rate      : DECIMAL(10, 2)
+  PERFORM FetchExchangeRate USING "EUR" GIVING rate-task
   -- do other work here; rate-task runs concurrently
-  AWAIT rate-task GIVING rate
+  AWAIT rate-task INTO rate
   COMPUTE converted = amount * rate
 END-PROCEDURE
 ```
 
-`ASYNC DO` returns a handle; `AWAIT handle GIVING var` blocks until complete.
+Launching an async procedure uses `PERFORM … GIVING <future>` — the `GIVING` target
+must be declared `FUTURE OF T`, where `T` is the procedure's `RETURNING` type (a non-`FUTURE`
+target is `E216`; `GIVING` on a *synchronous* `PERFORM` is `E215` — see §8.5). The procedure
+body runs concurrently on a virtual thread, returning a `FUTURE OF T` handle immediately.
+`AWAIT <future> INTO <var>` blocks until the future completes and stores its value into
+`<var>`. This works identically for a module-qualified async `PERFORM` (see §8.5).
 
 ### 18.5 Thread Safety of DATA Section
 
@@ -1701,7 +1992,7 @@ END-PROCEDURE
 
 ---
 
-## 19. Security Primitives  ✅ Implemented (Phase 11)
+## 19. Security Primitives
 
 ### 19.1 `VALIDATE` Statement
 
@@ -1720,7 +2011,7 @@ PROCEDURE ProcessPayment USING amount : MONEY(12,2), account-id : TEXT(20):
     MUST BE <= 1000000       FAIL-MSG "Exceeds single-transaction limit"
   VALIDATE account-id:
     MUST NOT BE EMPTY
-    MUST MATCH "[A-Z0-9]{8,20}"  FAIL-MSG "Invalid account ID format"
+    MUST MATCH "[A-Z0-9]\{8,20\}"  FAIL-MSG "Invalid account ID format"
     MUST LENGTH >= 8
 END-PROCEDURE
 ```
@@ -1765,7 +2056,7 @@ DATA:
 
 PROCEDURE StorePAN USING raw-pan : TEXT(19):
   VALIDATE raw-pan:
-    MUST MATCH "[0-9]{13,19}"
+    MUST MATCH "[0-9]\{13,19\}"
   -- ENCRYPT returns ciphertext; plaintext never written to disk or logs
   MOVE ENCRYPT(raw-pan USING AES-256-GCM KEY pan-key) TO pan-number
   CALL jdbc.execute
@@ -1801,7 +2092,7 @@ LET key = KEYVALUE FROM ENV "MY_SECRET_KEY"
 LET key = KEYVALUE FROM KEYSTORE "config/keys.p12" ALIAS "app-key" PASSWORD FROM ENV "KS_PASS"
 ```
 
-Supported algorithms (Phase 11): `AES-256-GCM` (default), `AES-128-GCM`,
+Supported algorithms: `AES-256-GCM` (default), `AES-128-GCM`,
 `CHACHA20-POLY1305`. Weak algorithms (`DES`, `3DES`, `AES-CBC` without authentication)
 are rejected by the TypeChecker with an explanatory error.
 
@@ -1825,7 +2116,7 @@ CALL jdbc.query
 
 ---
 
-## 20. `CONFIG` Section  ✅ Implemented (Phase 11)
+## 20. `CONFIG` Section
 
 The `CONFIG` section separates deployment configuration from program logic.
 All bindings are resolved and validated at program startup before any data is processed.
@@ -1890,7 +2181,7 @@ java -Dkobol.env.file=/etc/myapp/config.env -jar myapp.jar
 
 ---
 
-## 21. `VARIANT` Types  ✅ Implemented (Phase 11)
+## 21. `VARIANT` Types
 
 Named, sealed union types. The compiler enforces exhaustive matching.
 
@@ -1910,33 +2201,45 @@ VARIANT OrderStatus IS
 
 Construction:
 ```kobol
+MOVE Pending TO current-status                         -- nullary case: bare name (no parens)
 MOVE Active(order-date: TODAY) TO current-status
 MOVE Shipped(ship-date: TODAY, tracking: "TRK12345") TO current-status
 ```
+A field-less case is constructed by its bare name (`Pending`); the empty-parens form
+(`Pending()`) is also accepted. Cases that declare fields require the argument list.
 
 `VARIANT` types compile to a sealed abstract JVM class with one concrete inner class
 per case. The TypeChecker enforces that every `MATCH` on a `VARIANT` handles all cases.
 
 ---
 
-## 22. `MATCH` / Pattern Matching  ⚠️ Partial (literal + variant patterns done; range/type/guard planned)
+## 22. `MATCH` / Pattern Matching
 
 ```
 match-stmt ::= MATCH expr ':'
                  (WHEN pattern ':'
-                   statement*)+
-                 (OTHERWISE ':' statement*)?
+                   statement+)+          -- arm body is indented on the following line(s)
+                 (OTHERWISE ':'
+                   statement+)?
                END-MATCH
 ```
+
+Each arm uses block form: `WHEN pattern:` on its own line, with the body indented on the
+following line(s) — the same `:`-plus-indent shape as `IF` (§8.6) and `FOR`. An inline body
+on the same line as `WHEN … :` is **not** accepted.
 
 ### 22.1 Literal Patterns
 
 ```kobol
 MATCH tx.type:
-  WHEN "CREDIT"  : DO ApplyCredit   USING tx
-  WHEN "DEBIT"   : DO ApplyDebit    USING tx
-  WHEN "TRANSFER": DO ProcessTransfer USING tx
-  OTHERWISE      : RAISE ApplicationError "Unknown type: {tx.type}"
+  WHEN "CREDIT":
+    DO ApplyCredit USING tx
+  WHEN "DEBIT":
+    DO ApplyDebit USING tx
+  WHEN "TRANSFER":
+    DO ProcessTransfer USING tx
+  OTHERWISE:
+    RAISE ApplicationError "Unknown type: {tx.type}"
 END-MATCH
 ```
 
@@ -1944,10 +2247,14 @@ END-MATCH
 
 ```kobol
 MATCH inv.amount:
-  WHEN 0.01 .. 999.99   : MOVE "SMALL"  TO size-category
-  WHEN 1000 .. 9999.99  : MOVE "MEDIUM" TO size-category
-  WHEN 10000 ..         : MOVE "LARGE"  TO size-category
-  OTHERWISE             : MOVE "INVALID" TO size-category
+  WHEN 0.01 .. 999.99:
+    MOVE "SMALL" TO size-category
+  WHEN 1000 .. 9999.99:
+    MOVE "MEDIUM" TO size-category
+  WHEN 10000 ..:
+    MOVE "LARGE" TO size-category
+  OTHERWISE:
+    MOVE "INVALID" TO size-category
 END-MATCH
 ```
 
@@ -1955,10 +2262,14 @@ END-MATCH
 
 ```kobol
 MATCH status:
-  WHEN Pending                      : DISPLAY "Awaiting confirmation"
-  WHEN Active  WITH order-date      : DISPLAY "Active since {order-date}"
-  WHEN Shipped WITH tracking        : DISPLAY "Tracking: {tracking}"
-  WHEN Closed  WITH reason          : DISPLAY "Closed: {reason}"
+  WHEN Pending:
+    DISPLAY "Awaiting confirmation"
+  WHEN Active WITH order-date:
+    DISPLAY "Active since {order-date}"
+  WHEN Shipped WITH tracking:
+    DISPLAY "Tracking: {tracking}"
+  WHEN Closed WITH reason:
+    DISPLAY "Closed: {reason}"
 END-MATCH
 ```
 
@@ -1966,9 +2277,12 @@ END-MATCH
 
 ```kobol
 MATCH inv:
-  WHEN Invoice WITH amount > 10000 AND NOT paid : DO EscalateToReview USING inv
-  WHEN Invoice WITH NOT paid                     : DO SendReminder      USING inv
-  OTHERWISE                                      : CONTINUE
+  WHEN Invoice WITH amount > 10000 AND NOT paid:
+    DO EscalateToReview USING inv
+  WHEN Invoice WITH NOT paid:
+    DO SendReminder USING inv
+  OTHERWISE:
+    CONTINUE
 END-MATCH
 ```
 
@@ -1981,7 +2295,7 @@ warns if `OTHERWISE` is absent.
 
 ---
 
-## 23. Structured Logging  ✅ Implemented (Phase 10)
+## 23. Structured Logging
 
 The `LOG` statement emits structured, levelled output backed by SLF4J.
 
@@ -2029,7 +2343,7 @@ LOG INFO "Processing card {card-number}"
 
 ---
 
-## 24. Built-In Testing  ⚠️ Partial (TEST/TABLE TEST parsed; test runner + MOCK planned)
+## 24. Built-In Testing
 
 `TEST` blocks are first-class language constructs. They are compiled only when
 the `--test` flag is passed to the compiler.
@@ -2112,7 +2426,7 @@ Output is JUnit-XML-compatible (`TEST-*.xml`) for integration with CI pipelines.
 
 ---
 
-## 25. HTTP / REST Client  ✅ Implemented
+## 25. HTTP / REST Client
 
 ```kobol
 PROCEDURE FetchRate USING currency : TEXT RETURNING DECIMAL:
@@ -2141,7 +2455,7 @@ TLS is always on for `https://` URLs; plain `http://` URLs trigger a compiler wa
 
 ---
 
-## 26. JSON / XML Serialisation  ✅ Implemented
+## 26. JSON / XML Serialisation
 
 ```kobol
 -- Display JSON to stdout:
@@ -2161,7 +2475,7 @@ Include them explicitly with `INCLUDING SENSITIVE`.
 
 ---
 
-## 27. CLI & TUI Support  ⚠️ Partial (DISPLAY STYLED done; MENU/BROWSE/FORM planned)
+## 27. CLI & TUI Support
 
 ### 27.1 `ACCEPT` — Terminal Input
 
@@ -2218,72 +2532,7 @@ terminal reports no ANSI support.
 
 ---
 
-### 27.4 `SELECT ... FROM MENU` (Interactive Menu)  *(Phase 14)*
-
-```
-menu-stmt ::= SELECT identifier FROM MENU string-literal ':'
-                (OPTION string-literal ':' statement*)*
-              END-SELECT
-```
-
-```kobol
-SELECT action FROM MENU "Choose action":
-  OPTION "Process invoices"  : DO RunBatch
-  OPTION "View summary"      : DO ShowSummary
-  OPTION "Export to CSV"     : DO ExportData
-  OPTION "Quit"              : STOP RUN
-END-SELECT
-```
-
-Renders a numbered list; user selects by number or arrow keys + Enter. Backed by
-Lanterna for full-screen rendering or JLine3 for inline rendering.
-
----
-
-### 27.5 `DISPLAY BROWSE` (Paginated Table)  *(Phase 14)*
-
-```
-browse-stmt ::= DISPLAY BROWSE identifier
-                  TITLE   string-literal
-                  COLUMNS field-name (',' field-name)*
-                END-BROWSE
-```
-
-```kobol
-DISPLAY BROWSE invoice-list
-  TITLE   "Unpaid Invoices — {invoice-list LENGTH} records"
-  COLUMNS invoice-id, customer, amount, due-date
-END-BROWSE
-```
-
-Renders a full-screen paginated table. Arrow keys scroll rows; Page Up/Down skip pages;
-`q` or Escape exits. Column widths are inferred from data; truncated with `...` if needed.
-
----
-
-### 27.6 `ACCEPT FORM` (Input Form)  *(Phase 14)*
-
-```
-form-stmt ::= ACCEPT FORM ':'
-                (FIELD string-literal INTO identifier (VALIDATE constraint)*)*
-              END-FORM
-```
-
-```kobol
-ACCEPT FORM:
-  FIELD "Customer ID"  INTO customer-id  VALIDATE MUST MATCH "[A-Z0-9]{6,10}"
-  FIELD "Start Date"   INTO start-date   VALIDATE MUST BE VALID-DATE
-  FIELD "Batch Size"   INTO batch-size   VALIDATE MUST BE > 0
-END-FORM
-```
-
-Renders a vertical form with labelled fields. Tab/Shift-Tab move between fields.
-Per-field validation runs on blur; errors are shown inline. Submit with Enter on
-the last field. Backed by Lanterna.
-
----
-
-## 28. REST API Server  ✅ Implemented (Javalin 6)
+## 28. REST API Server
 
 **Kobol** programs can expose business logic as a lightweight REST API using the `SERVER`
 block. The same `.kbl` file runs in batch mode (`--batch`) or server mode (`--server`).
@@ -2392,16 +2641,16 @@ java -jar myapp.jar          # --batch is the default
 
 ---
 
-## 29. Project Model & Toolchain  ✅ Implemented (Phase 9)
+## 29. Project Model & Toolchain
 
 Three user-facing build options exist, each serving a different audience.
 They are not competing — they detect each other and coexist:
 
-| Option | Audience | Phase |
-|--------|----------|-------|
-| `kobol.toml` + `kobol build` | Standalone **Kobol** projects; no Gradle/Maven knowledge needed | 9 |
-| `kobol-gradle-plugin` | Enterprise teams already on Gradle; mixed Kotlin+**Kobol** projects | 12 |
-| `kobol-maven-plugin` | Maven shops | Community |
+| Option | Audience |
+|--------|----------|
+| `kobol.toml` + `kobol build` | Standalone **Kobol** projects; no Gradle/Maven knowledge needed |
+| `kobol-gradle-plugin` | Enterprise teams already on Gradle; mixed Kotlin+**Kobol** projects |
+| `kobol-maven-plugin` | Maven shops |
 
 `kobol build` auto-detects: `kobol.toml` → simple path; `build.gradle.kts` → delegate to Gradle; neither → single-file mode.
 
@@ -2409,7 +2658,7 @@ Note: the GraalVM Native Image Gradle plugin (`org.graalvm.buildtools:native-gra
 
 ---
 
-### 29.1 `kobol.toml` — Project Descriptor *(Phase 9)*
+### 29.1 `kobol.toml` — Project Descriptor
 
 Every standalone **Kobol** project has a `kobol.toml` at its root.
 
@@ -2467,9 +2716,8 @@ invoice-processor/
 ```
 
 Source files in sub-directories are automatically namespaced by directory name.
-`billing/TaxCalculator.kbl` is in the `billing` module. Phase 12 formalises this
-with an explicit `MODULE` declaration; directory layout is the informal equivalent
-before that.
+`billing/TaxCalculator.kbl` is in the `billing` module. An explicit `MODULE` declaration
+(§14) formalises this; directory layout is the implicit equivalent.
 
 ---
 
@@ -2571,7 +2819,7 @@ engine (already used to build the compiler itself):
 
 ---
 
-### 29.7 `kobol-gradle-plugin`  *(Phase 12)*
+### 29.7 `kobol-gradle-plugin`
 
 For enterprise teams already using Gradle (the majority of new JVM projects), the
 `kobol-gradle-plugin` integrates **Kobol** compilation into an existing Gradle build
@@ -2616,29 +2864,7 @@ Published to the **Gradle Plugin Portal** under the ID `dev.kobol`.
 
 ---
 
-### 29.8 `kobol-maven-plugin`  *(Community)*
-
-A Maven plugin is not a first-party priority before v1.0. Maven is declining for new
-JVM projects and maintaining three separate build integrations is premature at this
-stage. Community contributions are welcome.
-
-When implemented, the plugin would provide:
-```xml
-<plugin>
-  <groupId>dev.kobol</groupId>
-  <artifactId>kobol-maven-plugin</artifactId>
-  <version>1.0.0</version>
-  <executions>
-    <execution>
-      <goals><goal>compile</goal><goal>test</goal></goals>
-    </execution>
-  </executions>
-</plugin>
-```
-
----
-
-## 30. XML Processing  ✅ Implemented (WRITE/PARSE XML)
+## 30. XML Processing
 
 **Kobol** provides first-class XML support for the domains where XML is the standard
 interchange format: financial messaging (ISO 20022 / SWIFT MX), healthcare (HL7 FHIR,

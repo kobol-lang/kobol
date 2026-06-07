@@ -1,0 +1,30 @@
+Kobol
+Copyright 2026 The Kobol Project
+
+This product includes software developed by The Kobol Project
+(https://github.com/kobol-lang/kobol).
+
+The Kobol compiler, runtime, standard library, Gradle plugin, and VS Code
+extension are made available under your choice of:
+  - the Apache License, Version 2.0 (see LICENSE), or
+  - the Eclipse Public License, Version 2.0 (see LICENSE-EPL-2.0.txt).
+
+Documentation under docs/ (including LANGUAGE_SPEC.md) is licensed separately
+under the Creative Commons Attribution 4.0 International License (CC-BY-4.0);
+see docs/LICENSE.
+
+Attribution requirement
+------------------------
+Redistributions and derivative works of the code, in source or binary form,
+must retain this NOTICE file and the copyright notice above, per section 4 of
+the Apache License 2.0. This file must be carried forward in derivative works.
+
+Third-party components
+----------------------
+This distribution bundles third-party open-source software, each retaining its
+own license and copyright notices. A complete dependency license inventory can
+be generated from the build; bundled components include (non-exhaustive):
+  - Eclipse LSP4J            — Eclipse Public License 2.0
+  - ObjectWeb ASM            — BSD-3-Clause
+The license texts for bundled dependencies are reproduced in their respective
+artifacts and in the generated dependency report.
