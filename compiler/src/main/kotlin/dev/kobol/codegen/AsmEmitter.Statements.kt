@@ -516,6 +516,73 @@ internal fun AsmEmitter.emitInteropInvoke(
     return retDesc
 }
 
+/**
+ * If [methodName] on [owner] is a Kotlin `suspend` function callable with these args, emit the
+ * Continuation→FUTURE bridge and return true; else return false so the caller emits the ordinary
+ * interop call (challenge **F15 #6**).
+ *
+ * A `suspend fun f(p…): T` is `f(p…, Continuation)Object` on the JVM. The bridge:
+ *  1. builds a [dev.kobol.runtime.KobolContinuation] (its `future` is the result sink) into a local;
+ *  2. pushes the receiver (instance call) + the user args coerced to the real params (P1 — the SAME
+ *     [JvmCoercion] every interop call uses, incl. F22 J→I narrowing);
+ *  3. passes the continuation as the trailing param and invokes the suspend method;
+ *  4. calls `continuation.settle(returnValue)` → CompletableFuture (handles a body that completed
+ *     synchronously vs. one that suspended), leaving a future Kobol's existing AWAIT consumes.
+ *
+ * The continuation lives in an Object-typed slot, so the load sites CHECKCAST it to the exact type
+ * each use needs (the trailing `Continuation` param, then `KobolContinuation` for `settle`) — the
+ * verifier sees `Object` otherwise. Falls through (returns false) for an ambiguous/unresolved
+ * suspend target, so behaviour is never worse than the prior guess.
+ */
+private fun AsmEmitter.tryEmitSuspend(
+    ctx: MethodContext,
+    stmt: CallStatement,
+    methodName: String,
+    owner: String,
+    invokeOpcode: Int,
+    isInterface: Boolean,
+    loadReceiver: (() -> Unit)?,
+): Boolean {
+    val argDescs = stmt.args.map { jvmDescriptor(inferExprType(it)) }
+    val resolved = (classpathResolver.resolveSuspend(owner, methodName, argDescs)
+        as? dev.kobol.semantic.ClasspathSymbolResolver.CallResolution.Resolved)?.sig ?: return false
+
+    val mv = ctx.mv
+    val kobolCont    = "dev/kobol/runtime/KobolContinuation"
+    val continuation = "kotlin/coroutines/Continuation"
+
+    // 1. continuation = new KobolContinuation(); keep it (settle() needs it after the invoke).
+    mv.visitTypeInsn(NEW, kobolCont)
+    mv.visitInsn(DUP)
+    mv.visitMethodInsn(INVOKESPECIAL, kobolCont, "<init>", "()V", false)
+    val contSlot = ctx.allocLocal("__suspend_cont", KobolType.JavaObjectType())
+    storeLocal(mv, KobolType.JavaObjectType(), contSlot)
+
+    // 2. receiver (instance call) + user args, each coerced to the real (non-Continuation) param.
+    loadReceiver?.invoke()
+    if (loadReceiver != null && owner != "java/lang/Object") mv.visitTypeInsn(CHECKCAST, owner)
+    val params = Type.getArgumentTypes(resolved.descriptor)   // [p0…, Continuation]
+    stmt.args.forEachIndexed { i, arg ->
+        emitExpr(ctx, arg)
+        dev.kobol.semantic.JvmCoercion.emit(mv, argDescs[i], params[i].descriptor)
+    }
+
+    // 3. trailing Continuation arg, then invoke the real suspend method.
+    loadLocal(mv, KobolType.JavaObjectType(), contSlot)
+    mv.visitTypeInsn(CHECKCAST, continuation)
+    mv.visitMethodInsn(invokeOpcode, owner, methodName, resolved.descriptor, isInterface)
+
+    // 4. settle(returnValue) → CompletableFuture. Stack: [ret]; load+cast cont, SWAP under ret.
+    loadLocal(mv, KobolType.JavaObjectType(), contSlot)
+    mv.visitTypeInsn(CHECKCAST, kobolCont)
+    mv.visitInsn(SWAP)
+    mv.visitMethodInsn(INVOKEVIRTUAL, kobolCont, "settle", "(Ljava/lang/Object;)L$COMPLETABLE_FUTURE;", false)
+
+    // Store the future into GIVING, or discard for fire-and-forget (mirrors a fire-and-forget PERFORM).
+    if (stmt.giving != null) emitStore(ctx, stmt.giving) else mv.visitInsn(POP)
+    return true
+}
+
 internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
         val mv = ctx.mv
         // stmt.method has original case from Token.rawValue ("LocalDate.now", "kobol.security.sha256").
@@ -538,15 +605,18 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
             else null
 
         when (val target = dev.kobol.semantic.resolveInteropTarget(ownerParts, importAliasMap, receiverType)) {
-            is dev.kobol.semantic.InteropTarget.Static -> doStaticCall(target.owner)
+            // F15 #6: a Kotlin `suspend` target is invisible to the ordinary path (its JVM arity is
+            // off by one — the trailing Continuation), so try the Continuation→FUTURE bridge first.
+            is dev.kobol.semantic.InteropTarget.Static ->
+                if (!tryEmitSuspend(ctx, stmt, methodName, target.owner, INVOKESTATIC, false, null))
+                    doStaticCall(target.owner)
             is dev.kobol.semantic.InteropTarget.Instance -> {
                 // Instance interop CALL (F21) → shared classpath-aware emit, receiver pushed first.
                 val isIface = target.owner in JVM_INTERFACE_TYPES
-                emitInteropCall(
-                    ctx, stmt, methodName, target.owner,
-                    if (isIface) INVOKEINTERFACE else INVOKEVIRTUAL, isInterface = isIface,
-                    loadReceiver = { loadRef(ctx, dev.kobol.parser.ast.Reference(listOf(alias), stmt.pos)) },
-                )
+                val op = if (isIface) INVOKEINTERFACE else INVOKEVIRTUAL
+                val loadReceiver = { loadRef(ctx, dev.kobol.parser.ast.Reference(listOf(alias), stmt.pos)) }
+                if (!tryEmitSuspend(ctx, stmt, methodName, target.owner, op, isIface, loadReceiver))
+                    emitInteropCall(ctx, stmt, methodName, target.owner, op, isInterface = isIface, loadReceiver = loadReceiver)
             }
             dev.kobol.semantic.InteropTarget.Unresolvable -> doStaticCall(ownerParts.joinToString("/"))
             dev.kobol.semantic.InteropTarget.Reflective -> {

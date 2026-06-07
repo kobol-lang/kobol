@@ -183,6 +183,38 @@ class ClasspathSymbolResolverTest {
         assertEquals("(I)V", r.sig.descriptor)
     }
 
+    // ─── F15 #6 — Kotlin `suspend` functions resolve past their hidden Continuation ──────
+
+    @Test fun `resolveSuspend resolves a static Kotlin suspend function past its Continuation (F15)`() {
+        // Top-level `suspend fun suspendValue(): String` → static `suspendValue(Continuation)Object`.
+        // A 0-user-arg call matches it via resolveSuspend (the trailing Continuation is implicit).
+        val r = resolver.resolveSuspend("dev/kobol/testfixture/KotlinSuspendApiKt", "suspendValue", emptyList())
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertTrue(r.sig.isSuspend, "the resolved sig must be flagged suspend")
+        assertEquals("(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", r.sig.descriptor)
+    }
+
+    @Test fun `resolveSuspend matches an instance suspend method by its user args (F15)`() {
+        // `suspend fun greet(name: String): String` → `greet(String, Continuation)Object`; the user
+        // supplies only the String, the Continuation is appended by the bridge.
+        val r = resolver.resolveSuspend("dev/kobol/testfixture/SuspendService", "greet", listOf("Ljava/lang/String;"))
+        assertTrue(r is CallResolution.Resolved, "expected Resolved, got $r")
+        assertEquals("(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", r.sig.descriptor)
+    }
+
+    @Test fun `resolveByArgs does not match a suspend function whose arity is off by the Continuation (F15)`() {
+        // The 0-user-arg suspend call has no plain arity-0 method — only (Continuation)Object exists.
+        // This is exactly why suspend needs its own resolver entry rather than riding resolveByArgs.
+        val r = resolver.resolveByArgs("dev/kobol/testfixture/KotlinSuspendApiKt", "suspendValue", emptyList())
+        assertEquals(CallResolution.NoSuchMethod, r)
+    }
+
+    @Test fun `resolveSuspend reports NoSuchMethod for a non-suspend Java method (F15)`() {
+        // A plain JDK method is never suspend → resolveSuspend never claims it (caller proceeds normally).
+        val r = resolver.resolveSuspend("java/lang/System", "lineSeparator", emptyList())
+        assertEquals(CallResolution.NoSuchMethod, r)
+    }
+
     @Test fun `resolveByArgs prefers the long overload over narrowing when both exist`() {
         // Math.abs has abs(int)/abs(long)/abs(float)/abs(double). A long arg matches abs(long)
         // exactly (cost 0) and must NOT narrow to abs(int) — narrowing is the last resort.

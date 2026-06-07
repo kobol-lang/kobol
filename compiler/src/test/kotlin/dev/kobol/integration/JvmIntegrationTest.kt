@@ -890,6 +890,52 @@ class JvmIntegrationTest {
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
 
+    // ─── F15 #6 — Kotlin `suspend` function → FUTURE bridge ──────────────────────────
+    // A `suspend fun f(): T` compiles to `f(Continuation)Object` on the JVM. A Kobol CALL that
+    // passes no Continuation guessed a zero-arg `f()` → NoSuchMethodError at run, type-checks
+    // clean = P3 landmine. The fix recognises the @Metadata `isSuspend` flag and bridges the call
+    // through KobolContinuation into a CompletableFuture, so the existing FUTURE/AWAIT machinery
+    // consumes the result (P1 — reuse, no new async surface; P6 — one async rule).
+
+    @Test fun `static Kotlin suspend function bridges to a FUTURE and AWAIT yields the value (F15)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinSuspendApiKt" AS SUS
+            DATA:
+              fut    : FUTURE OF TEXT
+              result : TEXT
+            PROCEDURE Main:
+              CALL SUS.suspendValue GIVING fut
+              AWAIT fut INTO result
+              DISPLAY "got: [{result}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("got: [suspended]" in out,
+            "suspend suspendValue() must bridge to a FUTURE resolving to its value; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `instance Kotlin suspend method with an argument bridges to a FUTURE (F15)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.SuspendService" AS SVC
+            DATA:
+              fut    : FUTURE OF TEXT
+              result : TEXT
+            PROCEDURE Main:
+              LET s = NEW SVC
+              CALL s.greet WITH "Ada" GIVING fut
+              AWAIT fut INTO result
+              DISPLAY "greet: [{result}]"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("greet: [hi Ada]" in out,
+            "instance suspend greet(String) must bridge its receiver + arg through the Continuation; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
     // F6 (decision lock) — an uninitialized DECIMAL default zero is REPRESENTED identically to an
     // explicit `= 0`: both are stored as `BigDecimal.ZERO` (scale 0). The F6 decision (keep the
     // stored default == explicit zero) still holds; F18 only changed how a DECIMAL is DISPLAYED —

@@ -14,3 +14,14 @@ package dev.kobol.testfixture
  */
 @Suppress("RedundantSuspendModifier")
 suspend fun suspendValue(): String = "suspended"
+
+/**
+ * An INSTANCE suspend method with a real argument — exercises the bridge's receiver + arg-coercion
+ * path (INVOKEVIRTUAL `greet(String, Continuation)Object`) alongside the static top-level case above.
+ * Neither body actually suspends, so the coroutine returns its value directly (not COROUTINE_SUSPENDED)
+ * and [dev.kobol.runtime.KobolContinuation.settle] completes the future synchronously.
+ */
+class SuspendService {
+    @Suppress("RedundantSuspendModifier")
+    suspend fun greet(name: String): String = "hi $name"
+}

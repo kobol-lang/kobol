@@ -911,14 +911,27 @@ class TypeChecker(
     private fun checkCall(stmt: CallStatement) {
         stmt.args.forEach { checkExpr(it) }
         stmt.giving?.let { resolveRefType(it) }
+        val resolver = interopResolver ?: return
+        // Resolution is quiet here: a non-interop / reflective / unresolved CALL simply yields no
+        // site (the statement path tolerates those forms; codegen handles their dispatch).
+        val site = interopCallSite(stmt.method, stmt.args) ?: return
+
+        // F15 #6: a Kotlin `suspend` target is bridged to a CompletableFuture (see codegen). Its
+        // result, if captured, MUST land in a FUTURE OF T — a non-future GIVING would store a
+        // CompletableFuture into e.g. a TEXT slot and crash at run (type-checks clean = P3 landmine).
+        // Fire-and-forget (no GIVING) discards the future, mirroring a fire-and-forget async PERFORM.
+        if (resolver.resolveSuspend(site.owner, site.methodName, site.argDescs)
+                is ClasspathSymbolResolver.CallResolution.Resolved) {
+            val g = stmt.giving?.let { resolveRefType(it) }
+            if (g != null && g !is KobolType.FutureType && g != KobolType.UnknownType)
+                error("E237", "CALL '${stmt.method}' targets a Kotlin suspend function — its result is a FUTURE; the GIVING target must be a FUTURE OF T, got $g", stmt.pos)
+            return
+        }
+
         // F15: the GIVING form captures the return into a variable, so a nullable Kotlin return is
         // the same NPE landmine as the expression form — warn W237 on every call form (P6), from
         // the shared resolver (P1). Fire-and-forget (no GIVING) discards the value → no warning.
-        // Resolution is quiet here: a non-interop / reflective / unresolved CALL simply doesn't
-        // warn (the statement path tolerates those forms; codegen handles their dispatch).
         if (stmt.giving != null) {
-            val resolver = interopResolver ?: return
-            val site = interopCallSite(stmt.method, stmt.args) ?: return
             (resolver.resolveByArgs(site.owner, site.methodName, site.argDescs)
                 as? ClasspathSymbolResolver.CallResolution.Resolved)
                 ?.let { warnNullableKotlinReturn(stmt.method, it.sig, stmt.pos) }

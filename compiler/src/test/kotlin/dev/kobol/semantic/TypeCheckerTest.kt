@@ -901,6 +901,48 @@ class TypeCheckerTest {
         )
     }
 
+    // ─── F15 #6 — Kotlin `suspend` function → FUTURE bridge (type-check side) ─────────
+    // A suspend CALL is bridged to a CompletableFuture; if its result is captured, the GIVING
+    // target must be a FUTURE OF T. Capturing it into a non-future (e.g. TEXT) would store a
+    // CompletableFuture into the wrong slot and crash at run — reject it (E237), not silently.
+
+    @Test fun `suspend CALL GIVING a non-future target is rejected E237 (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinSuspendApiKt" AS SUS
+            DATA:
+              wrong : TEXT = ""
+            PROCEDURE Main:
+              CALL SUS.suspendValue GIVING wrong
+              DISPLAY wrong
+            END-PROCEDURE
+        """.trimIndent())
+        assertTrue(
+            "E237" in tc.diagnostics.errors.map { it.code },
+            "expected E237 for a suspend result captured into a non-FUTURE; errors=${tc.diagnostics.errors.map { it.code }}",
+        )
+    }
+
+    @Test fun `suspend CALL GIVING a FUTURE target type-checks clean (F15)`() {
+        val tc = analyze("""
+            PROGRAM T
+            IMPORT "dev.kobol.testfixture.KotlinSuspendApiKt" AS SUS
+            DATA:
+              fut    : FUTURE OF TEXT
+              result : TEXT = ""
+            PROCEDURE Main:
+              CALL SUS.suspendValue GIVING fut
+              AWAIT fut INTO result
+              DISPLAY result
+            END-PROCEDURE
+        """.trimIndent())
+        assertFalse(
+            tc.diagnostics.hasErrors,
+            "a suspend result captured into a FUTURE must resolve clean. Errors:\n" +
+                tc.diagnostics.errors.joinToString("\n") { it.render() },
+        )
+    }
+
     // -------------------------------------------------------------------------
     // F28 — multifile-class-facade nullability (the COMMON library case)
     // -------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import java.net.URLClassLoader
 import kotlin.metadata.KmFunction
 import kotlin.metadata.KmProperty
 import kotlin.metadata.isNullable
+import kotlin.metadata.isSuspend
 import kotlin.metadata.jvm.KotlinClassMetadata
 import kotlin.metadata.jvm.getterSignature
 import kotlin.metadata.jvm.signature
@@ -31,6 +32,14 @@ data class JvmMethodSig(
      * return is a silent-NPE landmine the type checker warns on.
      */
     val returnNullable: Boolean = false,
+    /**
+     * True when the declaring class is Kotlin and this method is `suspend` per its `@Metadata`
+     * (challenge **F15 #6**). Its real JVM shape is `(<params…>, Lkotlin/coroutines/Continuation;)
+     * Ljava/lang/Object;` — the synthetic trailing [Continuation] and erased `Object` return are why
+     * a plain arity-matched [resolveByArgs] never finds it (the user supplies one fewer arg). Always
+     * false for a Java/JDK method (no metadata). Resolved for a call by [resolveSuspend].
+     */
+    val isSuspend: Boolean = false,
 )
 
 /**
@@ -101,11 +110,17 @@ class ClasspathSymbolResolver(classpath: List<String>) {
         }
 
         // F15: a Kotlin method's nullable return (`T?`) erases to the same JVM descriptor as a
-        // non-null one — the difference is only in @Metadata. Decode it and mark the matching sigs.
+        // non-null one, and a `suspend` modifier is invisible in the descriptor too — both live only
+        // in @Metadata. Decode them and mark the matching sigs (keyed by name + JVM descriptor).
         val nullableByKey = nullableKeysFromParsed(parsed)
-        return if (nullableByKey.isEmpty()) raw.methods
+        val suspendByKey  = suspendKeysFromParsed(parsed)
+        return if (nullableByKey.isEmpty() && suspendByKey.isEmpty()) raw.methods
         else raw.methods.map { sig ->
-            if (nullableByKey.contains(sig.name + sig.descriptor)) sig.copy(returnNullable = true) else sig
+            val key = sig.name + sig.descriptor
+            sig.copy(
+                returnNullable = sig.returnNullable || nullableByKey.contains(key),
+                isSuspend = suspendByKey.contains(key),
+            )
         }
     }
 
@@ -232,6 +247,30 @@ class ClasspathSymbolResolver(classpath: List<String>) {
             if (!prop.returnType.isNullable) continue
             val getter = prop.getterSignature ?: continue
             keys.add(getter.name + getter.descriptor)
+        }
+        return keys
+    }
+
+    /**
+     * `name + JVM descriptor` keys of every `suspend` function (challenge **F15 #6**). The descriptor
+     * from [KmFunction.signature] is the REAL JVM signature — i.e. it already carries the synthetic
+     * trailing `Continuation` parameter and the erased `Object` return — so it keys the same
+     * [JvmMethodSig] the byte read produced. A multifile-class FACADE has none of its own (handled
+     * by the part-class union in [readMethods], same as nullability).
+     */
+    private fun suspendKeysFromParsed(parsed: KotlinClassMetadata?): Set<String> = when (parsed) {
+        is KotlinClassMetadata.Class              -> suspendKeysOf(parsed.kmClass.functions)
+        is KotlinClassMetadata.FileFacade         -> suspendKeysOf(parsed.kmPackage.functions)
+        is KotlinClassMetadata.MultiFileClassPart -> suspendKeysOf(parsed.kmPackage.functions)
+        else                                      -> emptySet()
+    }
+
+    private fun suspendKeysOf(functions: List<KmFunction>): Set<String> {
+        val keys = HashSet<String>()
+        for (fn in functions) {
+            if (!fn.isSuspend) continue
+            val sig = fn.signature ?: continue
+            keys.add(sig.name + sig.descriptor)
         }
         return keys
     }
@@ -371,9 +410,56 @@ class ClasspathSymbolResolver(classpath: List<String>) {
                else CallResolution.Ambiguous(winners.map { it.sig })
     }
 
+    /**
+     * Resolve a Kotlin `suspend` [methodName] on [ownerInternalName] callable with the user-supplied
+     * argument descriptors [argDescs] — which do NOT include the hidden trailing `Continuation`
+     * (challenge **F15 #6**). A suspend method's JVM shape is `(<params…>, Continuation)Object`, so a
+     * call of `n` user args matches a suspend overload of `n + 1` JVM params whose last is a
+     * `Continuation`; the leading `n` params are scored by [JvmCoercion.cost] exactly like
+     * [resolveByArgs]. Returns:
+     *  - [CallResolution.Resolved] — unique cheapest suspend overload (its `sig.descriptor` is the
+     *    REAL suspend descriptor, incl. the Continuation, for the codegen bridge to emit);
+     *  - [CallResolution.Ambiguous] — a tie at minimum cost;
+     *  - [CallResolution.NoSuchMethod] — no suspend overload by that name is callable with these args;
+     *  - [CallResolution.ClassNotFound] — class unreadable.
+     *
+     * A non-Kotlin (Java/JDK) class has no suspend methods, so this always reports
+     * [CallResolution.NoSuchMethod] for it — the caller then proceeds down the ordinary path.
+     */
+    fun resolveSuspend(ownerInternalName: String, methodName: String, argDescs: List<String>): CallResolution {
+        val methods = methodsOf(ownerInternalName) ?: return CallResolution.ClassNotFound
+        val named = methods.filter { it.name == methodName && it.isPublic && it.isSuspend }
+        if (named.isEmpty()) return CallResolution.NoSuchMethod
+
+        data class Scored(val sig: JvmMethodSig, val cost: Int)
+        val scored = ArrayList<Scored>()
+        for (sig in named) {
+            val params = Type.getArgumentTypes(sig.descriptor)
+            if (params.isEmpty() || params.last().descriptor != "L$CONTINUATION;") continue
+            val userParams = params.dropLast(1)
+            if (userParams.size != argDescs.size) continue
+            var total = 0
+            var ok = true
+            for (i in argDescs.indices) {
+                val c = JvmCoercion.cost(argDescs[i], userParams[i].descriptor, ::isSubtype)
+                if (c == null) { ok = false; break }
+                total += c
+            }
+            if (ok) scored.add(Scored(sig, total))
+        }
+        if (scored.isEmpty()) return CallResolution.NoSuchMethod
+        val min = scored.minOf { it.cost }
+        val best = scored.filter { it.cost == min }
+        return if (best.size == 1) CallResolution.Resolved(best[0].sig)
+               else CallResolution.Ambiguous(best.map { it.sig })
+    }
+
     private companion object {
         /** Added to a varargs candidate so a viable fixed-arity overload of equal arg cost wins. */
         const val VARARGS_PENALTY = 1
+
+        /** Internal name of the synthetic trailing parameter every `suspend` function carries. */
+        const val CONTINUATION = "kotlin/coroutines/Continuation"
     }
 
     sealed class CallResolution {

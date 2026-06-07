@@ -1,7 +1,12 @@
 package dev.kobol.runtime
 
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 
 /**
  * Runtime helper for CONCURRENT blocks.
@@ -69,5 +74,47 @@ object KobolConcurrent {
     @JvmStatic
     fun startVirtual(task: Runnable) {
         Thread.ofVirtual().start(task)
+    }
+}
+
+/**
+ * Bridges a Kotlin `suspend` function call into a [CompletableFuture] so Kobol's existing
+ * FUTURE/AWAIT machinery can consume its result (challenge **F15 #6** — Continuation↔FUTURE bridge).
+ *
+ * A `suspend fun f(): T` has the JVM shape `f(<params…>, Continuation)Object`: the codegen builds
+ * one of these, passes it as the trailing continuation, then calls [settle] with the function's
+ * direct return value. Two completion paths, both funnelled into [future]:
+ *  - the body never actually suspends → the function returns the result directly and [settle]
+ *    completes the future with it (the common case for trivial wrappers / already-available data);
+ *  - the body suspends → the function returns the `COROUTINE_SUSPENDED` sentinel and the real
+ *    result (or failure) arrives later through [resumeWith].
+ *
+ * Uses only `kotlin-stdlib` coroutine primitives (`Continuation`, `COROUTINE_SUSPENDED`) — no
+ * `kotlinx-coroutines` dependency. The empty [context] means a suspending body has no dispatcher;
+ * a function that genuinely parks on another thread still resumes correctly, but there is no
+ * structured-concurrency scope (cancellation/timeout are not modelled — see the F15 row).
+ */
+class KobolContinuation : Continuation<Any?> {
+    @JvmField
+    val future: CompletableFuture<Any?> = CompletableFuture()
+
+    override val context: CoroutineContext get() = EmptyCoroutineContext
+
+    override fun resumeWith(result: Result<Any?>) {
+        result.fold(
+            onSuccess = { future.complete(it) },
+            onFailure = { future.completeExceptionally(it) },
+        )
+    }
+
+    /**
+     * Settle the bridge with the suspend function's DIRECT return [ret] and hand back the future.
+     * If [ret] is the `COROUTINE_SUSPENDED` sentinel the body suspended — the result will arrive via
+     * [resumeWith], so leave the future pending. Otherwise the body completed synchronously and [ret]
+     * IS the result (boxed). The `isDone` guard tolerates a body that resumed inline before returning.
+     */
+    fun settle(ret: Any?): CompletableFuture<Any?> {
+        if (ret !== COROUTINE_SUSPENDED && !future.isDone) future.complete(ret)
+        return future
     }
 }
