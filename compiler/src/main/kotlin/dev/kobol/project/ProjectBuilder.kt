@@ -38,6 +38,9 @@ object ProjectBuilder {
 
         // Resolve Maven dependencies declared in kobol.toml before compiling
         resolveDependencies(descriptor)
+        // Feed the resolved deps to the COMPILE-TIME interop resolver (E2/F27) so a CALL/NEW
+        // against a user dep links to the dep's real signatures, not a Kobol-side guess.
+        dev.kobol.KobolHome.interopClasspath = libJars()
 
         val kblFiles = sourceDir.walkTopDown()
             .filter { it.isFile && it.extension == "kbl" }
@@ -78,6 +81,13 @@ object ProjectBuilder {
 
         return success
     }
+
+    /** Absolute paths of the project's resolved dependency jars (the jars in `lib/`). */
+    private fun libJars(): List<String> =
+        File("lib").walkTopDown()
+            .filter { it.isFile && it.extension == "jar" }
+            .map { it.absolutePath }
+            .toList()
 
     /**
      * Parse every source file and, for those that declare a MODULE with EXPORTs,
@@ -266,6 +276,9 @@ object ProjectBuilder {
 
         val testClassesDir = File("${descriptor.outputDir}/test-classes")
         testClassesDir.mkdirs()
+
+        // Compile-time interop resolver sees the resolved deps too (E2/F27).
+        dev.kobol.KobolHome.interopClasspath = libJars()
 
         val registry = buildModuleRegistry(testFiles)
 

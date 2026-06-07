@@ -424,6 +424,20 @@ private fun AsmEmitter.emitInteropCall(
  * @param fallbackReturnWhenNoWant the return descriptor to assume in the un-resolved fallback when
  *   [wantDesc] is null (the legacy static→Object / instance→void guess).
  */
+/**
+ * Narrow an instance-call receiver to its resolved [owner] class before the INVOKEVIRTUAL/
+ * INVOKEINTERFACE (**F26**). The receiver's *declared* slot type is `Ljava/lang/Object;` whenever it
+ * crossed a procedure boundary (a `USING` param / `GIVING` result / DATA field typed by an imported
+ * class) — the verifier sees `Object`, not the concrete class, so the call would `VerifyError`. The
+ * CHECKCAST is a no-op for a local NEW receiver (its frame type already IS the class) and for a
+ * primitively-typed receiver (`owner` would be that exact class), so it is safe to emit always.
+ * Skipped only for a static call (no receiver) or an opaque `java/lang/Object` owner (nothing to narrow).
+ */
+private fun checkcastReceiver(mv: org.objectweb.asm.MethodVisitor, loadReceiver: (() -> Unit)?, owner: String) {
+    if (loadReceiver != null && owner != "java/lang/Object")
+        mv.visitTypeInsn(org.objectweb.asm.Opcodes.CHECKCAST, owner)
+}
+
 private fun AsmEmitter.emitInteropInvoke(
     ctx: MethodContext,
     args: List<dev.kobol.parser.ast.Expression>,
@@ -452,6 +466,7 @@ private fun AsmEmitter.emitInteropInvoke(
         }
         if (coerceOk) {
             loadReceiver?.invoke()
+            checkcastReceiver(mv, loadReceiver, owner)
             val varargsFixed = resolution.varargsFixed
             if (varargsFixed == null) {
                 args.forEachIndexed { i, arg ->
@@ -489,6 +504,7 @@ private fun AsmEmitter.emitInteropInvoke(
 
     // Fallback: unresolved / ambiguous / unreadable / un-coercible return → Kobol-side guess.
     loadReceiver?.invoke()
+    checkcastReceiver(mv, loadReceiver, owner)
     val argDesc = argDescs.joinToString("")
     args.forEach { emitExpr(ctx, it) }
     val retDesc = wantDesc ?: fallbackReturnWhenNoWant

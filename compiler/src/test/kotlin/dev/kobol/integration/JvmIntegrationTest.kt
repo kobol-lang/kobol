@@ -1080,6 +1080,42 @@ class JvmIntegrationTest {
         assertTrue("banana 2" in out, "second element should be banana 2, got:\n$out")
     }
 
+    // F16 — variant-typed list elements need NO snapshot (the bug F2 split out is unreachable).
+    // A RECORD buffer is a single reused instance whose fields are mutated in place (MOVE x TO
+    // buf.field), so ADD must snapshot it. A VARIANT has no such mutation path: case fields are
+    // not a dotted lvalue (TypeCheckerTest rejects `st.tracking` with E002), so the only way to
+    // "change" the holder `st` is to reassign it with a freshly-constructed instance
+    // (MOVE Shipped("B") TO st), which never touches the instance already stored in the list.
+    // Hence two ADDs of the same holder keep their distinct values with no copy() needed.
+    @Test fun `variant list elements keep distinct values without snapshot (F16)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            VARIANT OrderStatus IS
+              Pending
+              | Shipped WITH tracking : TEXT
+            DATA:
+              orders : LIST OF OrderStatus
+              st     : OrderStatus
+            PROCEDURE Main:
+              MOVE Shipped("A") TO st
+              ADD st TO orders
+              MOVE Shipped("B") TO st
+              ADD st TO orders
+              FOR EACH o IN orders:
+                MATCH o:
+                  WHEN Pending:
+                    DISPLAY "pending"
+                  WHEN Shipped WITH tracking:
+                    DISPLAY "tr={tracking}"
+                END-MATCH
+              END-FOR
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue("tr=A" in out, "first variant element must keep value A (no aliasing), got:\n$out")
+        assertTrue("tr=B" in out, "second variant element must be B, got:\n$out")
+    }
+
     // F2 — `MOVE rec TO rec` must snapshot the source buffer, not alias it. Previously the
     // destination held the live reference, so mutating the source after the MOVE leaked into
     // the destination too.
@@ -1403,6 +1439,35 @@ class JvmIntegrationTest {
         """)
         assertTrue(out.lineSequence().any { it.trim() == "hithere" },
             "a variable must win over a same-named IMPORT alias; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `JAVA-OBJECT carries its class across a procedure boundary (F26)`() {
+        // F21-full carries a NEW object's concrete class only within LOCAL flow (the COMPUTE_FRAMES
+        // slot type). Crossing a procedure boundary erases it: a USING param typed by an imported
+        // class name was a dangling RecordRefType, and the instance CALL pushed the receiver with no
+        // CHECKCAST → guess/VerifyError. F26: an IMPORT-alias type carries the owner, and the
+        // receiver is CHECKCAST to the resolved class, so `b.append` links java.lang.StringBuilder
+        // inside a procedure that received the builder from its caller.
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              result : TEXT
+            PROCEDURE AppendWorld USING b : SB:
+              CALL b.append WITH "world"
+            END-PROCEDURE
+            PROCEDURE Main:
+              LET sb = NEW SB
+              CALL sb.append WITH "hello "
+              PERFORM AppendWorld USING sb
+              CALL sb.toString GIVING result
+              DISPLAY result
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "hello world" },
+            "the builder mutated inside AppendWorld must be the same object; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
     }
 

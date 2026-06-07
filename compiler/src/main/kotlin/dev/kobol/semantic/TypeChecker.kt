@@ -41,13 +41,13 @@ class TypeChecker(
     private var importAliasMap: Map<String, String> = emptyMap()
 
     /**
-     * Classpath-aware interop resolver (E2), shared design with codegen. Lazily built from the same
-     * runtime classpath the program compiles against, so a `CALL` expression's inferred return type
-     * (here) is computed against the exact methods codegen will link (F14). Lazy → programs with no
-     * interop CALL expression pay nothing.
+     * Classpath-aware interop resolver (E2), shared design with codegen. Lazily built from
+     * [dev.kobol.KobolHome.compileClasspath] (runtime libs + the project's resolved user deps, F27),
+     * so a `CALL` expression's inferred return type (here) is computed against the exact methods
+     * codegen will link (F14). Lazy → programs with no interop CALL expression pay nothing.
      */
     private val interopResolver: ClasspathSymbolResolver? by lazy {
-        runCatching { ClasspathSymbolResolver(dev.kobol.KobolHome.runtimeClasspath()) }.getOrNull()
+        runCatching { ClasspathSymbolResolver(dev.kobol.KobolHome.compileClasspath()) }.getOrNull()
     }
 
     fun analyze(program: Program) {
@@ -1335,12 +1335,20 @@ class TypeChecker(
         is TypeSpec.FutureOf     -> KobolType.FutureType(toKobolType(spec.elementType))
         is TypeSpec.UuidType     -> KobolType.UuidType
         is TypeSpec.NamedType    -> {
-            // Check type aliases first, then fall back to RECORD/VARIANT lookup
+            // Resolution order: type alias → known VARIANT/RECORD symbol → IMPORT alias (an imported
+            // 3rd-party class used as a declared type, F26) → RecordRefType (forward/unknown record ref).
+            // A real record/variant wins over a same-named import alias; the import case lets a DATA
+            // field, USING param, or RETURNING type hold a concrete JAVA-OBJECT class so its owner
+            // survives across a procedure boundary (owner = the source name, re-resolved via the
+            // import alias map exactly like a NEW value — no fork).
             typeAliases[spec.name]
-                ?: run {
-                    val sym = symbols.resolve(spec.name)
-                    if (sym is Symbol.VariantSymbol) KobolType.VariantRefType(spec.name)
-                    else KobolType.RecordRefType(spec.name)
+                ?: when (symbols.resolve(spec.name)) {
+                    is Symbol.VariantSymbol -> KobolType.VariantRefType(spec.name)
+                    is Symbol.RecordSymbol  -> KobolType.RecordRefType(spec.name)
+                    else ->
+                        if (importAliasMap.containsKey(spec.name.uppercase()))
+                            KobolType.JavaObjectType(ownerName = spec.name)
+                        else KobolType.RecordRefType(spec.name)
                 }
         }
     }

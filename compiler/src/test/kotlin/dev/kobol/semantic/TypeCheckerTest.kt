@@ -4,6 +4,12 @@ import dev.kobol.lexer.Lexer
 import dev.kobol.parser.Parser
 import dev.kobol.parser.ast.Program
 import org.junit.jupiter.api.Test
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Opcodes
+import java.io.File
+import java.nio.file.Files
+import java.util.jar.JarEntry
+import java.util.jar.JarOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -709,5 +715,99 @@ class TypeCheckerTest {
               DISPLAY "{x}"
             END-PROCEDURE
         """.trimIndent(), "E232")
+    }
+
+    // F16 — a variant value's case fields are NOT addressable as a dotted lvalue (or rvalue):
+    // `st.tracking` rejects with E002 ("Cannot access field ... on type VariantRefType"). This is
+    // the invariant that makes the "variant list element un-snapshotted" aliasing UNREACHABLE:
+    // there is no surface path that mutates a variant instance's field in place, so a variant
+    // stored in a list can never be corrupted by a later write (unlike a reused RECORD buffer).
+    // Variant fields are read-only, and only via MATCH bindings (which are immutable locals).
+    @Test fun `variant case fields are not a dotted lvalue (F16 aliasing unreachable)`() {
+        expectErrors("""
+            PROGRAM T
+            VARIANT OrderStatus IS
+              Pending
+              | Shipped WITH tracking : TEXT
+            DATA:
+              st : OrderStatus
+            PROCEDURE Main:
+              MOVE Shipped("A") TO st
+              MOVE "B" TO st.tracking
+            END-PROCEDURE
+        """.trimIndent(), "E002")
+    }
+
+    @Test fun `reading a variant case field by dot is rejected (F16)`() {
+        expectErrors("""
+            PROGRAM T
+            VARIANT OrderStatus IS
+              Pending
+              | Shipped WITH tracking : TEXT
+            DATA:
+              st : OrderStatus
+              t  : TEXT
+            PROCEDURE Main:
+              MOVE Shipped("A") TO st
+              MOVE st.tracking TO t
+            END-PROCEDURE
+        """.trimIndent(), "E002")
+    }
+
+    // -------------------------------------------------------------------------
+    // F27 — user-dependency classpath plumbing (E2 leftover)
+    // -------------------------------------------------------------------------
+
+    /** Build a throwaway jar holding `ext/Widget` with `public static long compute(long)`. */
+    private fun buildWidgetJar(): File {
+        val cw = ClassWriter(ClassWriter.COMPUTE_MAXS)
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "ext/Widget", null, "java/lang/Object", null)
+        val mv = cw.visitMethod(Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC, "compute", "(J)J", null, null)
+        mv.visitCode()
+        mv.visitVarInsn(Opcodes.LLOAD, 0)
+        mv.visitInsn(Opcodes.LRETURN)
+        mv.visitMaxs(0, 0)
+        mv.visitEnd()
+        cw.visitEnd()
+        val jar = Files.createTempFile("kobol-f27-dep", ".jar").toFile().apply { deleteOnExit() }
+        JarOutputStream(jar.outputStream()).use { jos ->
+            jos.putNextEntry(JarEntry("ext/Widget.class"))
+            jos.write(cw.toByteArray())
+            jos.closeEntry()
+        }
+        return jar
+    }
+
+    // The E2 interop resolver must read the user's resolved project dependencies, not just
+    // the JDK + compiler/stdlib runtime classpath. `ext/Widget` lives ONLY in a freshly-built
+    // jar (never on the test JVM's classpath, so the resolver's system-resource fallback can't
+    // find it) — it resolves iff that jar is wired into the compile classpath.
+    @Test fun `interop CALL resolves against a user-dependency jar wired into the compile classpath (F27)`() {
+        val jar = buildWidgetJar()
+        val prog = """
+            PROGRAM T
+            IMPORT "ext.Widget" AS Widget
+            PROCEDURE Main:
+              LET n = CALL Widget.compute WITH 5
+              DISPLAY n
+            END-PROCEDURE
+        """.trimIndent()
+
+        val saved = dev.kobol.KobolHome.interopClasspath
+        try {
+            // Not wired: the dep is invisible to the compile-time resolver → E236 class-not-found.
+            dev.kobol.KobolHome.interopClasspath = emptyList()
+            expectErrors(prog, "E236")
+
+            // Wired in (mirrors `kobol build` feeding resolved lib/ jars): resolves clean.
+            dev.kobol.KobolHome.interopClasspath = listOf(jar.absolutePath)
+            assertTrue(
+                jar.absolutePath in dev.kobol.KobolHome.compileClasspath(),
+                "compileClasspath must include the wired user dep",
+            )
+            expectClean(prog)
+        } finally {
+            dev.kobol.KobolHome.interopClasspath = saved
+        }
     }
 }

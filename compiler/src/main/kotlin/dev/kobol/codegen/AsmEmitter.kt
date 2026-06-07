@@ -79,11 +79,12 @@ class AsmEmitter(
      * Classpath-aware interop symbol resolver (challenge enabler **E2**). Lazily reads
      * imported classes' real signatures so an interop `CALL` links to the true JVM
      * descriptor instead of a Kobol-side guess. Lazy so programs that never make an
-     * interop call pay nothing (P5); built from the same classpath the compiled program
-     * will run against.
+     * interop call pay nothing (P5); built from [dev.kobol.KobolHome.compileClasspath] =
+     * the runtime libs plus the project's resolved user dependencies (F27), so a CALL/NEW
+     * against a Maven/Gradle dep reads that dep's real signatures.
      */
     internal val classpathResolver: dev.kobol.semantic.ClasspathSymbolResolver by lazy {
-        dev.kobol.semantic.ClasspathSymbolResolver(dev.kobol.KobolHome.runtimeClasspath())
+        dev.kobol.semantic.ClasspathSymbolResolver(dev.kobol.KobolHome.compileClasspath())
     }
 
     /**

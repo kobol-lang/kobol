@@ -54,6 +54,25 @@ object KobolHome {
             .filter { it.isNotBlank() }
     }
 
+    /**
+     * Extra classpath entries the COMPILE-TIME interop resolver (E2) reads on top of
+     * [runtimeClasspath] — the user's resolved project dependencies (the jars in `lib/`). The
+     * project build sets this before compiling so a `CALL`/`NEW` against a Maven/Gradle
+     * dep links to that dep's REAL signatures instead of a Kobol-side guess (**F27**).
+     * Empty for a bare `kobol run single.kbl` (no deps). Process-wide and mutable: the
+     * compiler builds one project per process, and the builder resets it per build.
+     */
+    @Volatile
+    var interopClasspath: List<String> = emptyList()
+
+    /**
+     * Classpath the E2 symbol resolver reads at compile time: the runtime libs (JDK +
+     * compiler/stdlib jars) plus the user's resolved project dependencies ([interopClasspath]).
+     * Gradle vs Maven makes no difference here — both upstream paths produce a list of resolved
+     * jar paths; the resolver only needs the paths (**F27**).
+     */
+    fun compileClasspath(): List<String> = runtimeClasspath() + interopClasspath
+
     /** Human-readable diagnostic for the native-binary-without-runtime-jar case. */
     val missingRuntimeMessage: String
         get() = buildString {
