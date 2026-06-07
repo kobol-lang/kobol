@@ -87,14 +87,14 @@ internal fun AsmEmitter.emitForEach(ctx: MethodContext, stmt: ForEachStatement) 
         }
         mv.visitMethodInsn(INVOKEINTERFACE, "java/util/List", "iterator",
             "()Ljava/util/Iterator;", true)
-        val iterSlot = ctx.allocLocal("__iter_${stmt.variable}", KobolType.JavaObjectType)
+        val iterSlot = ctx.allocLocal("__iter_${stmt.variable}", KobolType.JavaObjectType())
         mv.visitVarInsn(ASTORE, iterSlot)
 
         val elemKType = if (fileDecl != null) {
             KobolType.RecordRefType(fileDecl.recordType)
         } else {
             val iterType = checker.typeOf(stmt.iterable)
-            (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType
+            (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType()
         }
         val elemSlot = ctx.allocLocal(stmt.variable, elemKType)
 
@@ -212,7 +212,7 @@ internal fun AsmEmitter.emitTry(ctx: MethodContext, stmt: TryStatement) {
 
         stmt.handlers.forEachIndexed { i, h ->
             mv.visitLabel(catchLabels[i])
-            val slot = if (h.binding != null) ctx.allocLocal(h.binding, KobolType.JavaObjectType) else ctx.allocLocal("__ex", KobolType.JavaObjectType)
+            val slot = if (h.binding != null) ctx.allocLocal(h.binding, KobolType.JavaObjectType()) else ctx.allocLocal("__ex", KobolType.JavaObjectType())
             mv.visitVarInsn(ASTORE, slot)
             emitBlock(ctx, h.body)
             // Skip GOTO when handler ends with unconditional exit (STOP RUN/RETURN/RAISE)
@@ -478,7 +478,7 @@ internal fun AsmEmitter.emitMatch(ctx: MethodContext, stmt: MatchStatement) {
                     val fullCaseName = "$outerName\$$caseClassName"
                     loadLocal(mv, subjType, subjSlot)
                     mv.visitTypeInsn(CHECKCAST, fullCaseName)
-                    val castSlot = ctx.allocLocal("__match_case_${pattern.caseName}", KobolType.JavaObjectType)
+                    val castSlot = ctx.allocLocal("__match_case_${pattern.caseName}", KobolType.JavaObjectType())
                     mv.visitVarInsn(ASTORE, castSlot)
                     val variantSym = checker.symbols.resolve(variantTypeName) as? Symbol.VariantSymbol
                     val caseInfo   = variantSym?.cases?.find { it.name == pattern.caseName }

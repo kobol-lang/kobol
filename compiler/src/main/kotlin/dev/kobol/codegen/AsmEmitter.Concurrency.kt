@@ -83,7 +83,7 @@ internal fun AsmEmitter.emitParallelForEach(ctx: MethodContext, stmt: ParallelFo
         val id     = concBlockCounter++
 
         val iterType   = checker.typeOf(stmt.iterable)
-        val elemKType  = (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType
+        val elemKType  = (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType()
         val elemDesc   = jvmDescriptor(elemKType)
 
         // --- Emit synthetic body method ---
@@ -95,13 +95,13 @@ internal fun AsmEmitter.emitParallelForEach(ctx: MethodContext, stmt: ParallelFo
         mv.visitTypeInsn(NEW, ARRAYLIST)
         mv.visitInsn(DUP)
         mv.visitMethodInsn(INVOKESPECIAL, ARRAYLIST, "<init>", "()V", false)
-        val listSlot = ctx.allocLocal("__pfe_list_$id", KobolType.JavaObjectType)
+        val listSlot = ctx.allocLocal("__pfe_list_$id", KobolType.JavaObjectType())
         mv.visitVarInsn(ASTORE, listSlot)
 
         // iterator
         emitExpr(ctx, stmt.iterable)
         mv.visitMethodInsn(INVOKEINTERFACE, "java/util/List", "iterator", "()Ljava/util/Iterator;", true)
-        val iterSlot = ctx.allocLocal("__pfe_iter_$id", KobolType.JavaObjectType)
+        val iterSlot = ctx.allocLocal("__pfe_iter_$id", KobolType.JavaObjectType())
         mv.visitVarInsn(ASTORE, iterSlot)
 
         val lTop = Label(); val lEnd = Label()
@@ -157,7 +157,7 @@ internal fun AsmEmitter.emitSyntheticParallelBodyMethod(cw: ClassWriter, methodN
                                                 owner: String, variable: String,
                                                 stmt: ParallelForEachStatement) {
         val iterType  = checker.typeOf(stmt.iterable)
-        val elemKType = (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType
+        val elemKType = (iterType as? KobolType.ListType)?.elementType ?: KobolType.JavaObjectType()
         val elemDesc  = jvmDescriptor(elemKType)
 
         val mv = cw.visitMethod(ACC_PRIVATE or ACC_STATIC or ACC_SYNTHETIC,

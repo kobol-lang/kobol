@@ -376,6 +376,104 @@ internal fun AsmEmitter.resolveConstructorOwner(ownerParts: List<String>): Strin
     return STDLIB_OWNERS[lowPath] ?: ownerParts.joinToString("/")
 }
 
+/**
+ * Shared classpath-aware interop call emit for BOTH the static (INVOKESTATIC) and the
+ * instance-receiver (INVOKEVIRTUAL/INVOKEINTERFACE) paths — one lowering, no static/instance
+ * copy-paste of the descriptor logic (P1).
+ *
+ * Reads the real method off the compile classpath via [ClasspathSymbolResolver.resolveByArgs]:
+ *  - ranks overloads by per-arg [JvmCoercion] cost and emits the needed widening per arg (**F13**),
+ *  - links the method's REAL return descriptor and converts it into the declared `GIVING` target
+ *    (**F14** static / **F21** instance).
+ * Resolved + storable → use it; class unreadable / ambiguous / un-coercible return → fall back to
+ * the Kobol-side descriptor guess (no regression). [loadReceiver] is null for a static call and,
+ * for an instance call, pushes the receiver before the arguments.
+ */
+private fun AsmEmitter.emitInteropCall(
+    ctx: MethodContext,
+    stmt: CallStatement,
+    methodName: String,
+    owner: String,
+    invokeOpcode: Int,
+    isInterface: Boolean,
+    loadReceiver: (() -> Unit)?,
+) {
+    val mv = ctx.mv
+    val argDescs   = stmt.args.map { jvmDescriptor(inferExprType(it)) }
+    val givingDesc = stmt.giving?.let { jvmDescriptor(resolveSymbolType(ctx, it.parts[0])) }
+    val resolution = classpathResolver.resolveByArgs(owner, methodName, argDescs)
+        as? dev.kobol.semantic.ClasspathSymbolResolver.CallResolution.Resolved
+    val resolved = resolution?.sig
+
+    if (resolved != null) {
+        val params      = Type.getArgumentTypes(resolved.descriptor)
+        val paramDescs  = params.map { it.descriptor }
+        val realRetDesc = Type.getReturnType(resolved.descriptor).descriptor
+        val givingOk = when {
+            givingDesc == null -> true                 // fire-and-forget: any return ok
+            realRetDesc == "V" -> false                // GIVING a void method → fall back
+            else -> dev.kobol.semantic.JvmCoercion.cost(realRetDesc, givingDesc) != null
+        }
+        if (givingOk) {
+            loadReceiver?.invoke()
+            val varargsFixed = resolution.varargsFixed
+            if (varargsFixed == null) {
+                stmt.args.forEachIndexed { i, arg ->
+                    emitExpr(ctx, arg)
+                    dev.kobol.semantic.JvmCoercion.emit(mv, argDescs[i], paramDescs[i])
+                }
+            } else {
+                // F24 varargs: emit the fixed leading args, then pack the rest into the trailing
+                // array parameter (reference element type — primitive-element varargs are excluded
+                // by the resolver, so ANEWARRAY/AASTORE always apply).
+                for (i in 0 until varargsFixed) {
+                    emitExpr(ctx, stmt.args[i])
+                    dev.kobol.semantic.JvmCoercion.emit(mv, argDescs[i], paramDescs[i])
+                }
+                val elem     = params[params.size - 1].elementType
+                val elemDesc = elem.descriptor
+                val count    = stmt.args.size - varargsFixed
+                mv.visitLdcInsn(count)
+                mv.visitTypeInsn(ANEWARRAY, elem.internalName)
+                for (k in 0 until count) {
+                    mv.visitInsn(DUP)
+                    mv.visitLdcInsn(k)
+                    val ai = varargsFixed + k
+                    emitExpr(ctx, stmt.args[ai])
+                    dev.kobol.semantic.JvmCoercion.emit(mv, argDescs[ai], elemDesc)
+                    mv.visitInsn(AASTORE)
+                }
+            }
+            mv.visitMethodInsn(invokeOpcode, owner, methodName, resolved.descriptor, isInterface)
+            if (stmt.giving != null) {
+                dev.kobol.semantic.JvmCoercion.emit(mv, realRetDesc, givingDesc!!)
+                emitStore(ctx, stmt.giving)
+            } else if (realRetDesc != "V") {
+                // Size-aware discard: a real long/double return is category-2 (POP2).
+                if (Type.getType(realRetDesc).size == 2) mv.visitInsn(POP2) else mv.visitInsn(POP)
+            }
+            return
+        }
+    }
+
+    // Fallback: unresolved / ambiguous / unreadable / un-storable return → Kobol-side guess.
+    // Default no-GIVING return differs by call kind to preserve prior behavior: a static call
+    // historically guessed Object, an instance call guessed void.
+    loadReceiver?.invoke()
+    val argDesc = argDescs.joinToString("")
+    stmt.args.forEach { emitExpr(ctx, it) }
+    val retDesc = when {
+        stmt.giving != null  -> givingDesc!!
+        loadReceiver != null -> "V"
+        else                 -> "Ljava/lang/Object;"
+    }
+    mv.visitMethodInsn(invokeOpcode, owner, methodName, "($argDesc)$retDesc", isInterface)
+    if (stmt.giving != null) emitStore(ctx, stmt.giving)
+    else if (retDesc != "V") {
+        if (Type.getType(retDesc).size == 2) mv.visitInsn(POP2) else mv.visitInsn(POP)
+    }
+}
+
 internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
         val mv = ctx.mv
         // stmt.method has original case from Token.rawValue ("LocalDate.now", "kobol.security.sha256")
@@ -388,42 +486,9 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
         val methodName = parts.last()
         val ownerParts = parts.dropLast(1)
 
-        // Helper: emit static call after args are ready
-        fun doStaticCall(owner: String) {
-            val argDesc = stmt.args.joinToString("") { jvmDescriptor(inferExprType(it)) }
-            // E2 (increment-1): for a fire-and-forget interop CALL (no GIVING) the return
-            // descriptor was guessed Ljava/lang/Object; — wrong for any method with a
-            // concrete (or void) return, so the emitted INVOKESTATIC named a non-existent
-            // method → NoSuchMethodError at run, clean type-check = P3 landmine. Read the
-            // real method off the classpath and use its TRUE return descriptor, but only
-            // when its parameter types already match what we emit (no coercion needed —
-            // overload coercion is F13). Class unreadable / ambiguous / arg-mismatch →
-            // fall back to today's guess (no regression). The GIVING path is left as-is:
-            // it links to the declared target type, which real-return propagation (F14)
-            // will refine in a later increment.
-            val realRet: Type? = if (stmt.giving == null) {
-                (classpathResolver.resolveCall(owner, methodName, stmt.args.size)
-                    as? dev.kobol.semantic.ClasspathSymbolResolver.CallResolution.Resolved)
-                    ?.sig
-                    ?.takeIf { sig ->
-                        Type.getArgumentTypes(sig.descriptor).joinToString("") { it.descriptor } == argDesc
-                    }
-                    ?.let { Type.getReturnType(it.descriptor) }
-            } else null
-
-            stmt.args.forEach { emitExpr(ctx, it) }
-            val retDesc = when {
-                stmt.giving != null -> jvmDescriptor(resolveSymbolType(ctx, stmt.giving.parts[0]))
-                realRet != null     -> realRet.descriptor
-                else                -> "Ljava/lang/Object;"
-            }
-            mv.visitMethodInsn(INVOKESTATIC, owner, methodName, "($argDesc)$retDesc", false)
-            if (stmt.giving != null) emitStore(ctx, stmt.giving)
-            else if (retDesc != "V") {
-                // Size-aware discard: a real long/double return is category-2 (POP2).
-                if (Type.getType(retDesc).size == 2) mv.visitInsn(POP2) else mv.visitInsn(POP)
-            }
-        }
+        // Static interop CALL (INVOKESTATIC) → shared classpath-aware emit (no receiver).
+        fun doStaticCall(owner: String) =
+            emitInteropCall(ctx, stmt, methodName, owner, INVOKESTATIC, isInterface = false, loadReceiver = null)
 
         if (ownerParts.size == 1) {
             val alias     = ownerParts[0].uppercase()
@@ -436,19 +501,24 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
             // Detect instance call: alias resolves to a DATA field or local variable
             val receiverType: KobolType? = ctx.getLocal(alias)?.type
                 ?: resolveSymbolType(ctx, alias).takeIf { it !is KobolType.UnknownType }
-            val receiverClass = receiverType?.let { jvmClassForInstanceCall(it) }
+            // A JAVA-OBJECT that carries its NEW owner (F21) resolves to the concrete class via the
+            // SAME owner map NEW uses (resolveConstructorOwner, P1) — so calls on a NEW-constructed
+            // value link against the real class instead of the erased java/lang/Object guess.
+            val receiverClass = when {
+                receiverType is KobolType.JavaObjectType && receiverType.ownerName != null ->
+                    resolveConstructorOwner(receiverType.ownerName.split("."))
+                receiverType != null -> jvmClassForInstanceCall(receiverType)
+                else -> null
+            }
 
             if (receiverClass != null) {
-                // Load receiver, emit args, dispatch INVOKEVIRTUAL / INVOKEINTERFACE
-                loadRef(ctx, dev.kobol.parser.ast.Reference(listOf(alias), stmt.pos))
-                stmt.args.forEach { emitExpr(ctx, it) }
-                val argDesc = stmt.args.joinToString("") { jvmDescriptor(inferExprType(it)) }
-                val retDesc = if (stmt.giving != null) jvmDescriptor(resolveSymbolType(ctx, stmt.giving.parts[0])) else "V"
+                // Instance interop CALL (F21) → shared classpath-aware emit, receiver pushed first.
                 val isIface = receiverClass in JVM_INTERFACE_TYPES
-                mv.visitMethodInsn(if (isIface) INVOKEINTERFACE else INVOKEVIRTUAL,
-                    receiverClass, methodName, "($argDesc)$retDesc", isIface)
-                if (stmt.giving != null) emitStore(ctx, stmt.giving)
-                else if (retDesc != "V") mv.visitInsn(POP)
+                emitInteropCall(
+                    ctx, stmt, methodName, receiverClass,
+                    if (isIface) INVOKEINTERFACE else INVOKEVIRTUAL, isInterface = isIface,
+                    loadReceiver = { loadRef(ctx, dev.kobol.parser.ast.Reference(listOf(alias), stmt.pos)) },
+                )
                 return
             }
 
@@ -474,8 +544,8 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
                 val fieldDesc = "L$aliasFqn;"
                 mv.visitFieldInsn(GETSTATIC, aliasFqn, staticFieldName, fieldDesc)
                 // Save receiver in a temp local
-                val receiverSlot = ctx.allocLocal("__call_rx", KobolType.JavaObjectType)
-                storeLocal(mv, KobolType.JavaObjectType, receiverSlot)
+                val receiverSlot = ctx.allocLocal("__call_rx", KobolType.JavaObjectType())
+                storeLocal(mv, KobolType.JavaObjectType(), receiverSlot)
                 // Emit all args
                 stmt.args.forEach { emitExpr(ctx, it) }
                 // Save each arg in a temp local
@@ -486,7 +556,7 @@ internal fun AsmEmitter.emitCall(ctx: MethodContext, stmt: CallStatement) {
                     s to t
                 }
                 // Load receiver
-                loadLocal(mv, KobolType.JavaObjectType, receiverSlot)
+                loadLocal(mv, KobolType.JavaObjectType(), receiverSlot)
                 // Push method name
                 mv.visitLdcInsn(methodName)
                 // Build Object[] for varargs

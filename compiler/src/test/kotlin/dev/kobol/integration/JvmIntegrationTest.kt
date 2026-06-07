@@ -1210,4 +1210,158 @@ class JvmIntegrationTest {
         assertTrue("---done---" in out,
             "interop CALL must link to the real descriptor and run to completion; got: $out")
     }
+
+    // ─── E2 (increment-2): overload coercion ranking (F13) + return propagation (F14) ──
+
+    @Test fun `interop CALL widens an int arg to a double-only overload (F13)`() {
+        // Math.sqrt has ONE overload, (D)D. A Kobol INTEGER arg emits a long (J). Inc-1 only
+        // used the real descriptor when params matched the emitted args EXACTLY (J != D), so it
+        // fell back to the guess and emitted sqrt(J)… → NoSuchMethodError at run (P3 landmine).
+        // F13 ranks the candidate, sees J widens to D, emits L2D before the call, links sqrt(D)D,
+        // and F14 converts the real double return into the declared DECIMAL (BigDecimal) GIVING var.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              result : DECIMAL = 0
+            PROCEDURE Main:
+              CALL Math.sqrt WITH 16 GIVING result
+              DISPLAY result
+              DISPLAY "---done---"
+        """)
+        assertTrue("4.0" in out, "sqrt(16) must widen int→double, link, and yield 4.0; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `interop CALL picks an overload by widening a mismatched arg width (F13)`() {
+        // Math.max has int/long/float/double overloads (4 at arity 2). A SMALLINT (I) and an
+        // INTEGER (J) arg make the Kobol-side guess "(IJ)" → Math.max(int,long) does NOT exist
+        // → NoSuchMethodError at run, type-checks clean (P3 landmine). F13 ranks by coercion
+        // cost, widens the SMALLINT I→J, and picks (JJ)J — the cheapest viable overload.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              a : SMALLINT = 3
+              b : INTEGER = 7
+              n : INTEGER = 0
+            PROCEDURE Main:
+              CALL Math.max WITH a, b GIVING n
+              DISPLAY n
+              DISPLAY "---done---"
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "7" },
+            "Math.max(SMALLINT 3, INTEGER 7) must widen+resolve to (long,long) and yield 7; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    // ─── F21: instance-receiver interop CALL routed through the classpath resolver ────
+
+    @Test fun `instance CALL links to the real return descriptor and widens it (F21)`() {
+        // String.length() returns int — ()I. A Kobol INTEGER GIVING target is a long, so the
+        // instance branch guessed length()J → NoSuchMethodError at run, type-checks clean
+        // (the same P3 landmine F13/F14 fixed for static calls, on the INVOKEVIRTUAL path).
+        // F21 routes the typed receiver (TEXT → java/lang/String) through resolveByArgs,
+        // links the real length()I, and widens the int return I→J into the INTEGER var.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              s : TEXT = "hello"
+              n : INTEGER = 0
+            PROCEDURE Main:
+              CALL s.length GIVING n
+              DISPLAY n
+              DISPLAY "---done---"
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "5" },
+            "String.length() must link (int return) and widen to 5; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `instance CALL picks the String overload and widens its int return (F21)`() {
+        // String.indexOf is overloaded — indexOf(int) and indexOf(String). With a TEXT arg the
+        // ranker excludes indexOf(int) (a String can't coerce to int) and picks indexOf(String),
+        // whose int return (()I → here (Ljava/lang/String;)I) widens into the INTEGER GIVING var.
+        // The old guess indexOf(Ljava/lang/String;)J named a non-existent return → NoSuchMethodError.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              s : TEXT = "hello"
+              n : INTEGER = 0
+            PROCEDURE Main:
+              CALL s.indexOf WITH "lo" GIVING n
+              DISPLAY n
+              DISPLAY "---done---"
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "3" },
+            "\"hello\".indexOf(\"lo\") must resolve the String overload and yield 3; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `interop CALL narrows an INTEGER arg into a Java int param (F22)`() {
+        // String.substring(int) takes int — (I)Ljava/lang/String;. A Kobol INTEGER is a long (J).
+        // JvmCoercion forbade narrowing, so resolveByArgs excluded the only overload and the call
+        // fell back to the guess substring(J) → NoSuchMethodError 'java.lang.String.substring(long)',
+        // type-checks clean = P3 landmine. F22 allows the guarded J→I narrowing (Math.toIntExact:
+        // throws on real overflow, never silently truncates), so the int-param overload links.
+        val out = compileAndRun("""
+            PROGRAM T
+            DATA:
+              s : TEXT = "hello"
+              i : INTEGER = 2
+              t : TEXT = ""
+            PROCEDURE Main:
+              CALL s.substring WITH i GIVING t
+              DISPLAY t
+              DISPLAY "---done---"
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "llo" },
+            "\"hello\".substring(2) must link the int-param overload and yield \"llo\"; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `instance CALL on a NEW-constructed object resolves against its concrete class (F21)`() {
+        // A value from NEW is typed JAVA-OBJECT. Before F21-full the type erased the concrete class
+        // to java/lang/Object, so an instance CALL on it guessed a method on Object →
+        // NoSuchMethodError 'java.lang.Object.append(...)', type-checks clean = P3 landmine.
+        // F21-full carries the NEW owner through the JAVA-OBJECT type, so the receiver resolves to
+        // java/lang/StringBuilder and the real append(String)/toString() link.
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.StringBuilder" AS SB
+            DATA:
+              t : TEXT
+            PROCEDURE Main:
+              LET bldr = NEW SB
+              CALL bldr.append WITH "hi"
+              CALL bldr.append WITH "there"
+              CALL bldr.toString GIVING t
+              DISPLAY t
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "hithere" },
+            "NEW StringBuilder append/toString must resolve on the concrete class; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    @Test fun `interop CALL packs trailing args into a varargs parameter (F24)`() {
+        // String.format(String, Object...) is varargs — descriptor (String,[Object])String. With
+        // no varargs support a 3-arg call mis-linked the fixed-arity-3 format(Locale,String,Object[])
+        // (the ranker's ref→ref CHECKCAST let "%s-%s" coerce to Locale) → ClassCastException at run,
+        // type-checks clean = P3 landmine. F24 matches the varargs overload, packs the trailing args
+        // into an Object[], and links the real descriptor (and being cheaper, beats the Locale match).
+        val out = compileAndRun("""
+            PROGRAM T
+            IMPORT "java.lang.String" AS Str
+            DATA:
+              result : TEXT
+            PROCEDURE Main:
+              CALL Str.format WITH "%s-%s", "a", "b" GIVING result
+              DISPLAY result
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        assertTrue(out.lineSequence().any { it.trim() == "a-b" },
+            "String.format must pack varargs and yield \"a-b\"; got:\n$out")
+        assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
 }

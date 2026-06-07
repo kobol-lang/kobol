@@ -14,7 +14,6 @@ sealed class KobolType {
     object DateType      : KobolType() { override fun toString() = "DATE" }
     object TimeType      : KobolType() { override fun toString() = "TIME" }
     object DateTimeType  : KobolType() { override fun toString() = "DATETIME" }
-    object JavaObjectType: KobolType() { override fun toString() = "JAVA-OBJECT" }
     object UnknownType   : KobolType() { override fun toString() = "UNKNOWN" }
     object VoidType      : KobolType() { override fun toString() = "VOID" }
     object UuidType      : KobolType() { override fun toString() = "UUID" }
@@ -44,6 +43,19 @@ sealed class KobolType {
         override fun toString() = name
     }
 
+    /**
+     * A reference to a JVM/Java object. [ownerName] is the SOURCE-written owner of the `NEW`
+     * that produced it (an IMPORT alias or a dotted FQN, e.g. "SB" or "java.util.ArrayList") when
+     * the concrete class is statically known, or null when the class is erased (exception
+     * bindings, JDBC rows, cross-procedure JAVA-OBJECT params/returns). Resolution of [ownerName]
+     * to a JVM internal name is deferred to codegen (`resolveConstructorOwner`) so the alias
+     * source of truth never forks (F21). A null owner is the opaque "some Object" default and
+     * behaves exactly as before — codegen treats it as `java/lang/Object`.
+     */
+    data class JavaObjectType(val ownerName: String? = null) : KobolType() {
+        override fun toString() = if (ownerName != null) "JAVA-OBJECT($ownerName)" else "JAVA-OBJECT"
+    }
+
     /** True if this type participates in numeric arithmetic. */
     fun isNumeric() = this is IntegerType || this is SmallIntType ||
                       this is DecimalType || this is MoneyType
@@ -52,6 +64,10 @@ sealed class KobolType {
     fun isAssignableTo(target: KobolType): Boolean = when {
         this == target                          -> true
         this is UnknownType || target is UnknownType -> true
+        // Any two JAVA-OBJECTs are assignment-compatible regardless of carried class: a known
+        // class flows into an opaque slot and vice versa (data-class equality on ownerName must
+        // not make `JavaObjectType("SB")` incompatible with a plain `JavaObjectType`).
+        this is JavaObjectType && target is JavaObjectType -> true
         this is IntegerType && target is SmallIntType -> true
         this is SmallIntType && target is IntegerType -> true
         this.isNumeric() && target.isNumeric()  -> true

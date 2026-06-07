@@ -350,7 +350,7 @@ class TypeChecker(
                 for (h in stmt.handlers) {
                     symbols.enterScope("ON-${h.exceptionType}")
                     if (h.binding != null) {
-                        symbols.define(Symbol.Variable(h.binding, KobolType.JavaObjectType, mutable = false, h.pos))
+                        symbols.define(Symbol.Variable(h.binding, KobolType.JavaObjectType(), mutable = false, h.pos))
                     }
                     checkBlock(h.body, returnType)
                     symbols.exitScope()
@@ -494,7 +494,7 @@ class TypeChecker(
                     val existing = symbols.resolve(stmt.into.parts[0])
                     if (existing == null) {
                         val elemType = stmt.asTypeName?.let { KobolType.RecordRefType(it) }
-                            ?: KobolType.JavaObjectType
+                            ?: KobolType.JavaObjectType()
                         symbols.define(Symbol.Variable(stmt.into.parts[0], KobolType.ListType(elemType), mutable = true, pos = stmt.pos))
                     }
                 }
@@ -538,8 +538,8 @@ class TypeChecker(
                 }
                 val existing = symbols.resolve(stmt.giving.parts[0])
                 if (existing == null) {
-                    val resultType = if (stmt.findOne) KobolType.JavaObjectType
-                                     else KobolType.ListType(KobolType.JavaObjectType)
+                    val resultType = if (stmt.findOne) KobolType.JavaObjectType()
+                                     else KobolType.ListType(KobolType.JavaObjectType())
                     symbols.define(Symbol.Variable(stmt.giving.parts[0], resultType, mutable = true, pos = stmt.pos))
                 }
             }
@@ -973,14 +973,16 @@ class TypeChecker(
         is NewExpr -> {
             // F12: construct an arbitrary classpath object. We cannot validate the constructor
             // against the real class without the E2 classpath-reading phase, so we only check
-            // the argument expressions and hand back JAVA-OBJECT (same opaque type CALL uses for
-            // interop results). Named arguments need declared fields to reorder → reject them.
+            // the argument expressions. The result is a JAVA-OBJECT that CARRIES its source owner
+            // (F21): a later instance CALL on this value resolves the real method against the
+            // concrete class instead of the erased java/lang/Object. Named arguments need declared
+            // fields to reorder → reject them.
             expr.args.forEach {
                 if (it is NamedArgument)
                     error("E031", "NEW ${expr.owner}: named arguments need a known constructor signature; use positional arguments", it.pos)
                 checkExpr(it)
             }
-            KobolType.JavaObjectType
+            KobolType.JavaObjectType(ownerName = expr.owner)
         }
 
         is NamedArgument -> checkExpr(expr.value)
