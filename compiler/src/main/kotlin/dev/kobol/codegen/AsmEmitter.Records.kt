@@ -41,21 +41,8 @@ internal fun AsmEmitter.emitRecordConditionMethods(cw: ClassWriter, rec: RecordD
     }
 
 /** Rewrite bare references to record fields into `__self.field` accesses. */
-private fun rewriteFieldRefsToSelf(expr: Expression, fieldNames: Set<String>): Expression = when (expr) {
-        is Reference ->
-            if (expr.parts.first() in fieldNames && expr.parts.first() != "__self")
-                Reference(listOf("__self") + expr.parts, expr.pos)
-            else expr
-        is BinaryExpr -> BinaryExpr(expr.op,
-            rewriteFieldRefsToSelf(expr.left, fieldNames),
-            rewriteFieldRefsToSelf(expr.right, fieldNames), expr.pos)
-        is UnaryExpr -> UnaryExpr(expr.op, rewriteFieldRefsToSelf(expr.operand, fieldNames), expr.pos)
-        is BuiltinCall -> BuiltinCall(expr.name, expr.args.map { rewriteFieldRefsToSelf(it, fieldNames) }, expr.pos)
-        is IndexExpr -> IndexExpr(
-            rewriteFieldRefsToSelf(expr.target, fieldNames),
-            rewriteFieldRefsToSelf(expr.index, fieldNames), expr.pos)
-        else -> expr
-    }
+private fun rewriteFieldRefsToSelf(expr: Expression, fieldNames: Set<String>): Expression =
+    rewriteBareFieldRefs(expr, fieldNames, listOf("__self"))
 
 internal fun AsmEmitter.emitVariantClasses(variantDecl: VariantDecl, outerName: String): Map<String, ByteArray> {
         val result = LinkedHashMap<String, ByteArray>()

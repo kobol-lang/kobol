@@ -567,9 +567,18 @@ internal fun AsmEmitter.emitMatch(ctx: MethodContext, stmt: MatchStatement) {
                 }
             }
             is MatchPattern.GuardPattern -> {
-                // Check inner pattern first; if it matches, evaluate the guard condition.
-                emitPatternCondition(ctx, pattern.inner, subjSlot, subjType, lNext)
-                emitExpr(ctx, pattern.guard)
+                // §22.4 guard over a record subject (`WHEN Invoice WITH amount > 10000 …`): the
+                // checker rewrote bare field names to `subject.field` and stashed the resolved,
+                // already-typed guard. The case name is a static type assertion on the subject's
+                // sole record type — always true, records have no subtypes — so skip the inner
+                // check. Otherwise emit the inner pattern check then the guard as usual.
+                val resolved = checker.resolvedGuards[pattern]
+                if (resolved != null) {
+                    emitExpr(ctx, resolved)
+                } else {
+                    emitPatternCondition(ctx, pattern.inner, subjSlot, subjType, lNext)
+                    emitExpr(ctx, pattern.guard)
+                }
                 mv.visitJumpInsn(IFEQ, lNext)
             }
         }

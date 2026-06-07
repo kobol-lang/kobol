@@ -530,9 +530,9 @@ class TypeCheckerTest {
     @Test fun `MATCH type pattern TEXT AS binding is clean`() = expectClean("""
         PROGRAM T
         DATA:
-          label : TEXT = "hello"
+          outcome : TEXT = "hello"
         PROCEDURE Main:
-          MATCH label:
+          MATCH outcome:
             WHEN TEXT AS s:
               DISPLAY s
             OTHERWISE:
@@ -669,6 +669,43 @@ class TypeCheckerTest {
               END-MATCH
             END-PROCEDURE
         """.trimIndent())
+    }
+
+    @Test fun `MATCH guard over a record subject with WITH is clean (v9)`() {
+        expectClean("""
+            PROGRAM T
+            RECORD Invoice:
+              amount : MONEY(12,2)
+              paid   : BOOLEAN
+            DATA:
+              inv   : Invoice
+              outcome : TEXT
+            PROCEDURE Main:
+              MATCH inv:
+                WHEN Invoice WITH amount > 10000 AND NOT paid:
+                  MOVE "escalate" TO outcome
+                OTHERWISE:
+                  MOVE "ok" TO outcome
+              END-MATCH
+            END-PROCEDURE
+        """.trimIndent())
+    }
+
+    @Test fun `MATCH record guard with non-boolean WITH condition emits E024 (v9)`() {
+        expectErrors("""
+            PROGRAM T
+            RECORD Invoice:
+              amount : MONEY(12,2)
+              paid   : BOOLEAN
+            DATA:
+              inv : Invoice
+            PROCEDURE Main:
+              MATCH inv:
+                WHEN Invoice WITH amount + amount:
+                  DISPLAY "hi"
+              END-MATCH
+            END-PROCEDURE
+        """.trimIndent(), "E024")
     }
 
     @Test fun `MATCH guard with non-boolean condition emits E024`() {

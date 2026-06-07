@@ -219,7 +219,10 @@ internal fun Parser.parseMatchStatement(): Statement {
 
 internal fun Parser.parseMatchPattern(): MatchPattern {
         val p = currentPos()
-        // Build the base pattern, then optionally wrap with a guard IF condition.
+        // A guard expression can attach in two documented ways: the explicit
+        // `WHEN <pattern> IF <cond>` form, or the §22.4 `WHEN Type WITH <cond>` form
+        // (where the WITH clause is a boolean expression, not a binding list).
+        var withGuard: Expression? = null
         val base: MatchPattern = when {
             // Type pattern: WHEN TEXT AS x:  |  WHEN INTEGER AS n:
             peek().type in setOf(TEXT, INTEGER, DECIMAL, MONEY, BOOLEAN, DATE, DATETIME, UUID) -> {
@@ -227,13 +230,20 @@ internal fun Parser.parseMatchPattern(): MatchPattern {
                 val binding  = if (check(AS)) { advance(); expectIdent("Expected binding name after AS") } else null
                 MatchPattern.TypePattern(typeName, binding, p)
             }
-            // Variant case pattern: CapitalisedName [WITH binding, ...]
+            // Variant/record case pattern: CapitalisedName [WITH binding, ... | WITH guard-expr]
             check(IDENTIFIER) && peek().value[0].isUpperCase() -> {
                 val caseName = advance().value
                 val bindings = mutableListOf<String>()
                 if (match(WITH)) {
-                    bindings.add(expectIdent("Expected binding name"))
-                    while (check(COMMA)) { advance(); bindings.add(expectIdent("Expected binding name")) }
+                    // A deconstruction binding list is `ident (',' ident)*` terminated by ':'
+                    // (or 'IF' before an explicit guard). Anything else after WITH — a comparison,
+                    // a NOT/AND, a literal — is a §22.4 boolean guard over the subject's fields.
+                    if (check(IDENTIFIER) && peek(1).type in setOf(COMMA, COLON, IF)) {
+                        bindings.add(expectIdent("Expected binding name"))
+                        while (check(COMMA)) { advance(); bindings.add(expectIdent("Expected binding name")) }
+                    } else {
+                        withGuard = parseExpression()
+                    }
                 }
                 MatchPattern.VariantPattern(caseName, bindings, p)
             }
@@ -248,11 +258,9 @@ internal fun Parser.parseMatchPattern(): MatchPattern {
                 }
             }
         }
-        // Guard: WHEN <pattern> IF <condition>:
-        return if (check(IF)) {
-            advance()
-            MatchPattern.GuardPattern(base, parseExpression(), p)
-        } else base
+        // Guard: WHEN <pattern> WITH <cond>  (§22.4)  or  WHEN <pattern> IF <cond>.
+        val guard = withGuard ?: if (check(IF)) { advance(); parseExpression() } else null
+        return if (guard != null) MatchPattern.GuardPattern(base, guard, p) else base
     }
 
     // CONFIG: item : TYPE FROM ENV "VAR" [REQUIRED | DEFAULT expr] [MUST ...]

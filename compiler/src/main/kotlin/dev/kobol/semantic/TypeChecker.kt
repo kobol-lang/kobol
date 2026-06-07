@@ -46,6 +46,15 @@ class TypeChecker(
     /** Type annotations attached to every Expression node (keyed by identity). */
     private val exprTypes = IdentityHashMap<Expression, KobolType>()
 
+    /**
+     * For a §22.4 record guard (`WHEN Invoice WITH amount > 10000 …`), the bare field
+     * names are rewritten to `subject.field` here, type-checked, and stashed so the emitter
+     * reuses the *same* rewritten node — its types are already in [exprTypes] (identity-keyed),
+     * so codegen need not rewrite a second time (a second rewrite would mint fresh nodes that
+     * miss the type cache and mis-emit). Empty unless a record guard is present.
+     */
+    internal val resolvedGuards = IdentityHashMap<MatchPattern.GuardPattern, Expression>()
+
     /** Import alias (UPPERCASE) → JVM binary class path; built in [analyze] from program imports. */
     private var importAliasMap: Map<String, String> = emptyMap()
 
@@ -748,7 +757,7 @@ class TypeChecker(
                     }
                 }
                 is MatchPattern.GuardPattern -> {
-                    checkMatchGuardClause(clause, pattern, subjectType, variantSym, returnType)
+                    checkMatchGuardClause(clause, pattern, stmt.subject, subjectType, variantSym, returnType)
                 }
             }
         }
@@ -764,10 +773,25 @@ class TypeChecker(
     private fun checkMatchGuardClause(
         clause: WhenClause,
         guard: MatchPattern.GuardPattern,
+        subject: Expression,
         subjectType: KobolType,
         variantSym: Symbol.VariantSymbol?,
         returnType: KobolType?,
     ) {
+        // §22.4 guard over a record subject: `MATCH inv: WHEN Invoice WITH amount > 10000 …`.
+        // The case name asserts the subject's (sole) record type, and bare field names in the
+        // guard read the subject's fields. Rewrite them to `subject.field` and check normally.
+        val recSym = (subjectType as? KobolType.RecordRefType)
+            ?.let { symbols.resolve(it.name) as? Symbol.RecordSymbol }
+        if (recSym != null && guard.inner is MatchPattern.VariantPattern && subject is Reference) {
+            val cond = rewriteBareFieldRefs(guard.guard, recSym.fields.keys, subject.parts)
+            resolvedGuards[guard] = cond
+            val guardType = checkExpr(cond)
+            if (guardType !is KobolType.BooleanType && guardType !is KobolType.UnknownType)
+                error("E024", "MATCH guard must be BOOLEAN, got $guardType", guard.pos)
+            checkBlock(clause.body, returnType)
+            return
+        }
         fun inScope(block: () -> Unit) {
             when (val inner = guard.inner) {
                 is MatchPattern.VariantPattern -> {

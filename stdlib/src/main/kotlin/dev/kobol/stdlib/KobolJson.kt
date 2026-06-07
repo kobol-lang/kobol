@@ -158,7 +158,7 @@ object KobolJson {
         is List<*>                  -> "[${value.joinToString(",") { serialize(it) }}]"
         is Map<*, *>                -> "{${value.entries.joinToString(",") { (k, v) ->
                                           "${jsonString(k.toString())}:${serialize(v)}" }}}"
-        else                        -> serializeObject(value, ::serialize)
+        else                        -> serializeObject(value, fieldSerializer = ::serialize)
     }
 
     // ── Pretty serialisation ─────────────────────────────────────────────
@@ -181,21 +181,40 @@ object KobolJson {
                 "{\n${value.entries.joinToString(",\n") { (k, v) ->
                     "$next${jsonString(k.toString())}: ${prettySerialize(v, depth + 1)}"
                 }}\n$pad}"
-            else                        -> serializeObject(value) { v -> prettySerialize(v, depth + 1) }
+            else                        -> serializeObject(value, pretty = pad to next) { v -> prettySerialize(v, depth + 1) }
         }
     }
 
     // ── Reflection helper ────────────────────────────────────────────────
 
-    private fun serializeObject(value: Any, fieldSerializer: (Any?) -> String): String {
+    /**
+     * Serialise an arbitrary JVM object (a Kobol record) by reflecting over its
+     * declared fields. When [pretty] is non-null it carries `(pad, next)` — the
+     * indentation of this object's braces and of its fields — so the object form
+     * indents the same way the List/Map forms do (otherwise records came out
+     * compact even under `DISPLAY JSON x PRETTY`, #v4).
+     */
+    private fun serializeObject(
+        value: Any,
+        pretty: Pair<String, String>? = null,
+        fieldSerializer: (Any?) -> String,
+    ): String {
         val cls    = value::class.java
         val fields = cls.declaredFields.filter { !it.isSynthetic }
         if (fields.isEmpty()) return jsonString(value.toString())
-        val entries = fields.joinToString(",") { f ->
-            f.isAccessible = true
-            "${jsonString(f.name)}:${fieldSerializer(f.get(value))}"
+        if (pretty == null) {
+            val entries = fields.joinToString(",") { f ->
+                f.isAccessible = true
+                "${jsonString(f.name)}:${fieldSerializer(f.get(value))}"
+            }
+            return "{$entries}"
         }
-        return "{$entries}"
+        val (pad, next) = pretty
+        val entries = fields.joinToString(",\n") { f ->
+            f.isAccessible = true
+            "$next${jsonString(f.name)}: ${fieldSerializer(f.get(value))}"
+        }
+        return "{\n$entries\n$pad}"
     }
 
     // ── String escaping ──────────────────────────────────────────────────

@@ -1241,4 +1241,57 @@ class ParserTest {
             """.trimIndent())
         }
     }
+
+    // -------------------------------------------------------------------------
+    // #v9 — MATCH guard via WITH (§22.4) vs deconstruction binding (§22.3)
+    // -------------------------------------------------------------------------
+
+    private fun firstWhenPattern(src: String): MatchPattern {
+        val match = parse(src).procedures.first().body.filterIsInstance<MatchStatement>().first()
+        return match.whenClauses.first().pattern
+    }
+
+    @Test fun `WHEN Type WITH boolean expr parses as a guard (v9)`() {
+        val pattern = firstWhenPattern("""
+            PROGRAM T
+            PROCEDURE Main:
+              MATCH inv:
+                WHEN Invoice WITH amount > 10000 AND NOT paid:
+                  DISPLAY "x"
+              END-MATCH
+            END-PROCEDURE
+        """.trimIndent())
+        val guard = assertIs<MatchPattern.GuardPattern>(pattern)
+        assertIs<MatchPattern.VariantPattern>(guard.inner)
+        assertEquals(0, (guard.inner as MatchPattern.VariantPattern).bindings.size)
+        assertIs<BinaryExpr>(guard.guard)   // the AND
+    }
+
+    @Test fun `WHEN Type WITH identifier list still parses as a deconstruction binding (v9)`() {
+        val pattern = firstWhenPattern("""
+            PROGRAM T
+            PROCEDURE Main:
+              MATCH s:
+                WHEN Active WITH order-date:
+                  DISPLAY "x"
+              END-MATCH
+            END-PROCEDURE
+        """.trimIndent())
+        val variant = assertIs<MatchPattern.VariantPattern>(pattern)
+        assertEquals(listOf("ORDER-DATE"), variant.bindings)  // identifiers are upper-cased in the AST
+    }
+
+    @Test fun `WHEN Type WITH NOT field parses as a guard, not a binding (v9)`() {
+        val pattern = firstWhenPattern("""
+            PROGRAM T
+            PROCEDURE Main:
+              MATCH inv:
+                WHEN Invoice WITH NOT paid:
+                  DISPLAY "x"
+              END-MATCH
+            END-PROCEDURE
+        """.trimIndent())
+        val guard = assertIs<MatchPattern.GuardPattern>(pattern)
+        assertIs<UnaryExpr>(guard.guard)
+    }
 }

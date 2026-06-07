@@ -618,6 +618,9 @@ class JvmIntegrationTest {
         """)
         assertTrue("widget" in out, "expected JSON output to contain field value, got:\n$out")
         assertTrue("---done---" in out)
+        // #v4: PRETTY must actually indent a record (was a compact no-op before).
+        assertTrue("\n  \"name\": \"widget\"" in out,
+            "expected PRETTY to indent record fields, got:\n$out")
     }
 
     // -------------------------------------------------------------------------
@@ -1996,5 +1999,67 @@ class JvmIntegrationTest {
         """)
         assertTrue("n=20" in out, "nums[2] (1-based) = 20; got:\n$out")
         assertTrue("---done---" in out, "program must complete; got:\n$out")
+    }
+
+    // -------------------------------------------------------------------------
+    // #v9 — MATCH guard clauses: WHEN Type WITH <boolean over subject fields>
+    // -------------------------------------------------------------------------
+
+    @Test fun `MATCH guard clause over a record subject (v9)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Invoice:
+              amount : MONEY(12,2)
+              paid   : BOOLEAN
+            DATA:
+              inv   : Invoice
+              outcome : TEXT
+            PROCEDURE Main:
+              MOVE 15000.00 TO inv.amount
+              MOVE FALSE    TO inv.paid
+              MATCH inv:
+                WHEN Invoice WITH amount > 10000 AND NOT paid:
+                  MOVE "escalate" TO outcome
+                WHEN Invoice WITH NOT paid:
+                  MOVE "remind" TO outcome
+                OTHERWISE:
+                  MOVE "ok" TO outcome
+              END-MATCH
+              DISPLAY "outcome={outcome}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        // First guard (amount > 10000 AND NOT paid) holds for 15000/unpaid.
+        assertTrue("outcome=escalate" in out, "expected first guard to win; got:\n$out")
+        assertTrue("---done---" in out)
+    }
+
+    @Test fun `MATCH guard falls through to a later guard arm (v9)`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            RECORD Invoice:
+              amount : MONEY(12,2)
+              paid   : BOOLEAN
+            DATA:
+              inv   : Invoice
+              outcome : TEXT
+            PROCEDURE Main:
+              MOVE 500.00 TO inv.amount
+              MOVE FALSE  TO inv.paid
+              MATCH inv:
+                WHEN Invoice WITH amount > 10000 AND NOT paid:
+                  MOVE "escalate" TO outcome
+                WHEN Invoice WITH NOT paid:
+                  MOVE "remind" TO outcome
+                OTHERWISE:
+                  MOVE "ok" TO outcome
+              END-MATCH
+              DISPLAY "outcome={outcome}"
+              DISPLAY "---done---"
+            END-PROCEDURE
+        """)
+        // amount is small so the first guard fails; the NOT-paid guard wins.
+        assertTrue("outcome=remind" in out, "expected fall-through to second guard; got:\n$out")
+        assertTrue("---done---" in out)
     }
 }
