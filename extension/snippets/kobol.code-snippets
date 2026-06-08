@@ -500,5 +500,52 @@
     "prefix": "newjava",
     "body": ["LET ${1:obj} = NEW ${2:ClassName} WITH ${0:args}"],
     "description": "Construct a Java object via NEW"
+  },
+  "DISPLAY PROGRESS": {
+    "prefix": "progress",
+    "body": ["DISPLAY PROGRESS ${1:processed} OF ${2:total} MESSAGE \"${0:Processing}\""],
+    "description": "TTY-gated progress bar (gap G1, §27.2)"
+  },
+  "ACCEPT FROM TERMINAL": {
+    "prefix": "accept",
+    "body": ["ACCEPT ${1:target} FROM TERMINAL PROMPT \"${0:Enter value: }\""],
+    "description": "Read a value from the terminal (gap G2, §27.1)"
+  },
+  "ACCEPT FROM ARGUMENT": {
+    "prefix": "acceptarg",
+    "body": ["ACCEPT ${1:target} FROM ARGUMENT \"${2:--name}\" DEFAULT ${0:value}"],
+    "description": "Read a CLI argument with a fallback default (gap G2, §27.1)"
+  },
+  "IF NOT CONFIRM": {
+    "prefix": "confirm",
+    "body": [
+      "IF NOT CONFIRM \"${1:Proceed?}\":",
+      "  ${0:-- aborted (EOF/non-interactive -> false)}",
+      "END-IF"
+    ],
+    "description": "Yes/No prompt; EOF returns false (gap G6, §27.1)"
+  },
+  "COMPUTE DIVIDE-USING": {
+    "prefix": "divu",
+    "body": ["COMPUTE ${1:result} = ${2:dividend} DIVIDE-USING ${3|UP,DOWN,CEILING,FLOOR,HALF-UP,HALF-DOWN,HALF-EVEN|} BY ${0:divisor}"],
+    "description": "Division with an explicit rounding mode (gap G4, §12.2)"
+  },
+  "ENCRYPTED field": {
+    "prefix": "encrypted",
+    "body": [
+      "${1:key-name} : TEXT SENSITIVE",
+      "${2:field-name} : TEXT(${3:19}) SENSITIVE ENCRYPTED USING ${4|AES-256-GCM,AES-128-GCM|} KEY ${1:key-name}"
+    ],
+    "description": "Field-level encrypted TEXT + its key field (gap G5, §19.3)"
+  },
+  "PARSE XML NAMESPACES": {
+    "prefix": "parsexmlns",
+    "body": ["PARSE XML ${1:xml-text} INTO ${2:target} AS ${3:TypeName} NAMESPACES \"${4:p}\" : \"${0:urn:example}\""],
+    "description": "Parse XML, validating the root namespace (gap G7, §30.3)"
+  },
+  "WRITE XML ROOT": {
+    "prefix": "writexmlroot",
+    "body": ["WRITE XML ${1:value} TO \"${2:output.xml}\" ROOT \"${0:RootElement}\""],
+    "description": "Write XML with an overridden root element (gap G3, §30.1)"
   }
 }

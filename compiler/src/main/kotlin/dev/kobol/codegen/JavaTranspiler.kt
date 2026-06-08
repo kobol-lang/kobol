@@ -323,6 +323,19 @@ class JavaTranspiler(
                     line("dev.kobol.runtime.KobolTest.assertTrue($cond);")
                 }
             }
+            is AssertRaisesStatement -> {
+                // Catch class via the SHARED resolver; '/'+'$' → '.' for Java source form.
+                val exClass = kobolExceptionJvmName(stmt.exceptionType).replace('/', '.').replace('$', '.')
+                line("{ // ASSERT RAISES ${stmt.exceptionType}  (own scope so __raised never clashes)")
+                indent++
+                line("boolean __raised = false;")
+                line("try {")
+                indent++; emitStatement(stmt.body); indent--
+                line("} catch ($exClass __e) { __raised = true; }")
+                line("dev.kobol.runtime.KobolTest.assertTrue(__raised, \"Expected ${stmt.exceptionType} to be raised\");")
+                indent--
+                line("}")
+            }
             is MockStatement -> {
                 line("dev.kobol.runtime.KobolMockRegistry.register(\"${stmt.procedureName}\", ${emitExpr(stmt.returns)});")
             }

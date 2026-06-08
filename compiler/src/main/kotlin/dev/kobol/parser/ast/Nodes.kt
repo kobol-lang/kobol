@@ -499,6 +499,13 @@ data class AssertStatement(
     override val pos: SourcePosition,
 ) : Statement()
 
+/** ASSERT RAISES ExceptionType: stmt  (§24.5 — passes iff running `body` raises that exception type) */
+data class AssertRaisesStatement(
+    val exceptionType: String,
+    val body: Statement,
+    override val pos: SourcePosition,
+) : Statement()
+
 /** MOCK ProcedureName RETURNS expr  (inside TEST / TEST TABLE blocks) */
 data class MockStatement(
     val procedureName: String,

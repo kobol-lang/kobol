@@ -35,9 +35,19 @@ internal fun Parser.parseSleepStatement(): SleepStatement {
     // TEST "name": ... END-TEST
     // -------------------------------------------------------------------------
 
-internal fun Parser.parseAssertStatement(): AssertStatement {
+internal fun Parser.parseAssertStatement(): Statement {
         val p = currentPos()
         expect(ASSERT, "Expected ASSERT")
+        // ASSERT RAISES ExceptionType: stmt  (§24.5). RAISES is contextual (not a reserved
+        // keyword), so detect it by token value before falling through to the boolean form.
+        if (peek().value == "RAISES") {
+            advance()
+            val exType = peek().rawValue           // preserve case for the failure message
+            expectIdent("Expected exception type after ASSERT RAISES")
+            expect(COLON, "Expected ':' after ASSERT RAISES <type>")
+            val body = parseStatement() ?: throw error("Expected a statement after ASSERT RAISES <type>:")
+            return AssertRaisesStatement(exType, body, p)
+        }
         val condition = parseExpression()
         val msg = if (match(WITH)) parseExpression() else null
         return AssertStatement(condition, msg, p)

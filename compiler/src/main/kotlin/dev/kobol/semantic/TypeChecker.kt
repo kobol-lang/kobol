@@ -468,6 +468,10 @@ class TypeChecker(
                 stmt.message?.let { checkExpr(it) }
             }
 
+            // Recurse into the asserted statement so its subtree gets real types — an
+            // un-checked body falls back to Object codegen → VerifyError (cf. the NOT/G6 fix).
+            is AssertRaisesStatement -> checkStatement(stmt.body, returnType)
+
             is MockStatement -> {
                 if (symbols.resolve(stmt.procedureName) == null) {
                     error("E212", "MOCK references unknown procedure '${stmt.procedureName}'", stmt.pos)

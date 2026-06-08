@@ -179,7 +179,10 @@ internal fun AsmEmitter.emitRepeat(ctx: MethodContext, stmt: RepeatStatement) {
         mv.visitLabel(lEnd)
     }
 
-private fun kobolExceptionJvmName(exType: String): String = when (exType.uppercase()) {
+// Shared by emitTry (ASM), emitAssertRaises (ASM) and the Java transpiler — one source for
+// the Kobol-exception-type → JVM-class mapping (P1). `else` resolves to the sealed base, so it
+// catches any RAISE'd exception (RAISE throws KobolException$ApplicationException).
+internal fun kobolExceptionJvmName(exType: String): String = when (exType.uppercase()) {
     "FILE-NOT-FOUND" -> "dev/kobol/runtime/KobolException\$FileNotFoundException"
     "IO-ERROR"       -> "dev/kobol/runtime/KobolException\$IoException"
     else             -> "dev/kobol/runtime/KobolException"
@@ -282,6 +285,33 @@ internal fun AsmEmitter.emitAssert(ctx: MethodContext, stmt: AssertStatement) {
             emitExpr(ctx, stmt.condition)
             mv.visitMethodInsn(INVOKESTATIC, "dev/kobol/runtime/KobolTest", "assertTrue", "(Z)V", false)
         }
+    }
+
+internal fun AsmEmitter.emitAssertRaises(ctx: MethodContext, stmt: AssertRaisesStatement) {
+        val mv       = ctx.mv
+        val exClass  = kobolExceptionJvmName(stmt.exceptionType)
+        val lTryStart = Label(); val lTryEnd = Label(); val lCatch = Label(); val lAssert = Label()
+        val raisedSlot = ctx.allocLocal("__raised", KobolType.BooleanType)
+
+        // __raised = false
+        mv.visitInsn(ICONST_0); mv.visitVarInsn(ISTORE, raisedSlot)
+        mv.visitTryCatchBlock(lTryStart, lTryEnd, lCatch, exClass)
+
+        mv.visitLabel(lTryStart)
+        emitStatement(ctx, stmt.body)
+        mv.visitLabel(lTryEnd)
+        // If the body always exits via throw (e.g. RAISE), control reaches the catch, never here;
+        // skip the dead GOTO so ASM frame computation stays sound (mirrors emitTry).
+        if (!endsWithExit(listOf(stmt.body))) mv.visitJumpInsn(GOTO, lAssert)
+
+        mv.visitLabel(lCatch)
+        mv.visitInsn(POP)                              // discard the caught exception ref
+        mv.visitInsn(ICONST_1); mv.visitVarInsn(ISTORE, raisedSlot)
+
+        mv.visitLabel(lAssert)
+        mv.visitVarInsn(ILOAD, raisedSlot)
+        mv.visitLdcInsn("Expected ${stmt.exceptionType} to be raised")
+        mv.visitMethodInsn(INVOKESTATIC, "dev/kobol/runtime/KobolTest", "assertTrue", "(ZLjava/lang/String;)V", false)
     }
 
 internal fun AsmEmitter.emitRaise(ctx: MethodContext, stmt: RaiseStatement) {

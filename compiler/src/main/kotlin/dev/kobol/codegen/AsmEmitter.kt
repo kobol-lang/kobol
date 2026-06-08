@@ -716,6 +716,7 @@ class AsmEmitter(
             is MatchStatement    -> emitMatch(ctx, stmt)
             is SleepStatement    -> emitSleep(ctx, stmt)
             is AssertStatement   -> emitAssert(ctx, stmt)
+            is AssertRaisesStatement -> emitAssertRaises(ctx, stmt)
             is MockStatement     -> emitMock(ctx, stmt)
             is HttpCallStatement -> emitHttpCall(ctx, stmt)
             is JdbcConnectStatement    -> emitJdbcConnect(ctx, stmt)

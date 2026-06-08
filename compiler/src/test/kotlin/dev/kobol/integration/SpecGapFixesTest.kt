@@ -235,6 +235,39 @@ class SpecGapFixesTest {
         assertTrue(threw, "namespace mismatch must raise an error")
     }
 
+    // ── G9: ASSERT RAISES ExceptionType: stmt ───────────────────────────────
+    @Test fun `G9 ASSERT RAISES passes when the body raises the named exception`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE Boom:
+              RAISE ApplicationError "kaboom"
+            END-PROCEDURE
+            PROCEDURE Main:
+              ASSERT RAISES ApplicationError: PERFORM Boom
+              DISPLAY "raises-ok"
+            END-PROCEDURE
+        """)
+        assertTrue("raises-ok" in out, "ASSERT RAISES must pass + continue when body raises: $out")
+    }
+
+    @Test fun `G9 ASSERT RAISES fails when the body raises nothing`() {
+        var threw = false
+        try {
+            compileAndRun("""
+                PROGRAM T2
+                PROCEDURE Main:
+                  ASSERT RAISES ApplicationError: DISPLAY "did nothing"
+                  DISPLAY "should-not-reach"
+                END-PROCEDURE
+            """, name = "T2")
+        } catch (e: Throwable) {
+            threw = true
+            val msg = generateSequence(e) { it.cause }.mapNotNull { it.message }.joinToString(" | ")
+            assertTrue("Expected ApplicationError to be raised" in msg, "wrong failure: $msg")
+        }
+        assertTrue(threw, "ASSERT RAISES must fail (AssertionError) when nothing is raised")
+    }
+
     // ── G8: MUST MATCH regex quantifier — escaped + raw forms compile ───────
     @Test fun `G8 MUST MATCH accepts escaped braces and raw strings`() {
         // Escaped braces in an interpolating string (spec §19.1 canonical form):
