@@ -547,5 +547,10 @@
     "prefix": "writexmlroot",
     "body": ["WRITE XML ${1:value} TO \"${2:output.xml}\" ROOT \"${0:RootElement}\""],
     "description": "Write XML with an overridden root element (gap G3, §30.1)"
+  },
+  "ASSERT RAISES": {
+    "prefix": "assertr",
+    "body": ["ASSERT RAISES ${1:ApplicationError}: ${0:PERFORM ProcedureName USING arg}"],
+    "description": "Assert that a statement raises a named exception (gap G9, §24.5)"
   }
 }

@@ -319,7 +319,7 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
             // NOT its declared inner type — mirror the local async PERFORM path. The declared
             // returnType descriptor would link to a method that does not exist (F9 landmine).
             if (proc.isAsync) {
-                stmt.args.forEach { emitExpr(ctx, it) }
+                emitProcArgs(ctx, stmt.args, proc.params)
                 mv.visitMethodInsn(INVOKESTATIC, targetClass, methodName,
                     "($paramDescs)L$COMPLETABLE_FUTURE;", false)
                 // Mirror the local ASYNC path: store the future into GIVING (F10 — consumed by
@@ -328,7 +328,7 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
                 return
             }
             val retDesc     = proc.returnType?.let { jvmDescriptor(it) } ?: "V"
-            stmt.args.forEach { emitExpr(ctx, it) }
+            emitProcArgs(ctx, stmt.args, proc.params)
             mv.visitMethodInsn(INVOKESTATIC, targetClass, methodName, "($paramDescs)$retDesc", false)
             if (proc.returnType != null) popValue(mv, proc.returnType)
             return
@@ -339,7 +339,7 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
 
         // ASYNC PROCEDURE: call returns CompletableFuture; store into GIVING if provided
         if (sym.isAsync) {
-            stmt.args.forEach { emitExpr(ctx, it) }
+            emitProcArgs(ctx, stmt.args, sym.params)
             mv.visitMethodInsn(INVOKESTATIC, ctx.owner, javaIdent(stmt.procedureName),
                 "($paramDescs)L$COMPLETABLE_FUTURE;", false)
             if (stmt.giving != null) emitStore(ctx, stmt.giving)
@@ -359,7 +359,7 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
             // Mock path: discard (result captured through COMPUTE Proc() expression, not PERFORM)
             mv.visitJumpInsn(GOTO, labelAfter)
             mv.visitLabel(labelReal)
-            stmt.args.forEachIndexed { _, arg -> emitExpr(ctx, arg) }
+            emitProcArgs(ctx, stmt.args, sym.params)
             mv.visitMethodInsn(INVOKESTATIC, ctx.owner, javaIdent(stmt.procedureName), "($paramDescs)$retDesc", false)
             popValue(mv, sym.returnType)
             mv.visitLabel(labelAfter)
@@ -369,7 +369,7 @@ internal fun AsmEmitter.emitPerform(ctx: MethodContext, stmt: PerformStatement) 
             mv.visitLdcInsn(stmt.procedureName)
             mv.visitMethodInsn(INVOKESTATIC, MOCK_REG2, "isMocked", "(Ljava/lang/String;)Z", false)
             mv.visitJumpInsn(IFNE, labelAfterVoid)  // if mocked, skip the call entirely
-            stmt.args.forEachIndexed { _, arg -> emitExpr(ctx, arg) }
+            emitProcArgs(ctx, stmt.args, sym.params)
             mv.visitMethodInsn(INVOKESTATIC, ctx.owner, javaIdent(stmt.procedureName), "($paramDescs)$retDesc", false)
             mv.visitLabel(labelAfterVoid)
         }

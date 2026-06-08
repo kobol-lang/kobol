@@ -275,6 +275,28 @@ internal fun AsmEmitter.coerceIntToTarget(mv: MethodVisitor, sourceType: KobolTy
     }
 }
 
+/**
+ * Emit call arguments aligned to a Kobol procedure's declared parameter types, widening each
+ * INTEGER/SMALLINT argument to BigDecimal when its parameter is MONEY/DECIMAL, and narrowing
+ * INTEGER→SMALLINT slots (G10). Without this, `PERFORM p USING 5` into a DECIMAL parameter pushes
+ * a `long` where the method descriptor says BigDecimal — the verifier then builds an inconsistent
+ * stack frame ("ASM frame error in procedure ..."). This is the SAME per-arg coercion the
+ * VARIANT-construction path already applies per field (P1 — shared lowering, not a 4th copy).
+ */
+internal fun AsmEmitter.emitProcArgs(
+    ctx: MethodContext, args: List<Expression>, params: List<Symbol.ProcedureSymbol.Param>
+) {
+    args.forEachIndexed { i, arg ->
+        emitExpr(ctx, arg)
+        val aType = inferExprType(arg)
+        when (val pType = params.getOrNull(i)?.type) {
+            is KobolType.MoneyType, is KobolType.DecimalType -> coerceToDecimalIfNeeded(ctx.mv, aType)
+            is KobolType.SmallIntType                        -> coerceIntToTarget(ctx.mv, aType, pType)
+            else                                             -> { /* descriptor matches stack — no coercion */ }
+        }
+    }
+}
+
 /** Emit an argument for a builtin whose parameter is BigDecimal, widening INTEGER/SMALLINT args. */
 internal fun AsmEmitter.emitDecimalArg(ctx: MethodContext, arg: Expression) {
     emitExpr(ctx, arg)
@@ -444,7 +466,7 @@ internal fun AsmEmitter.emitUserProcCallExpr(ctx: MethodContext, name: String,
         mv.visitJumpInsn(GOTO, labelAfter)
         // Real path: push args and call the real static method
         mv.visitLabel(labelReal)
-        args.forEach { emitExpr(ctx, it) }
+        emitProcArgs(ctx, args, sym.params)
         mv.visitMethodInsn(INVOKESTATIC, ctx.owner, javaIdent(name), "($paramDescs)$retDesc", false)
         mv.visitLabel(labelAfter)
     }

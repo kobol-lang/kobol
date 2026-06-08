@@ -2,6 +2,7 @@ package dev.kobol.codegen
 
 import dev.kobol.parser.ast.*
 import dev.kobol.semantic.KobolType
+import dev.kobol.semantic.Symbol
 import dev.kobol.semantic.TypeChecker
 
 /**
@@ -190,12 +191,15 @@ class JavaTranspiler(
             is DivideStatement   -> emitArith(stmt.into, "/", stmt.divisor, stmt.giving, stmt.dividingMode)
             is DisplayStatement  -> emitDisplay(stmt)
             is PerformStatement  -> {
-                val args = stmt.args.joinToString(", ") { emitExpr(it) }
                 if (stmt.moduleAlias != null) {
                     val mod = moduleRegistry.resolveByAlias(stmt.moduleAlias)
                         ?: error("Unknown module alias '${stmt.moduleAlias}' at transpile time")
+                    val proc = mod.procedures[stmt.procedureName.uppercase()]
+                    val args = emitProcArgs(stmt.args, proc?.params)
                     line("${mod.jvmClassName}.${javaIdent(stmt.procedureName)}($args);")
                 } else {
+                    val sym  = checker.symbols.resolve(stmt.procedureName) as? Symbol.ProcedureSymbol
+                    val args = emitProcArgs(stmt.args, sym?.params)
                     line("${javaIdent(stmt.procedureName)}($args);")
                 }
             }
@@ -725,6 +729,23 @@ class JavaTranspiler(
             emitExpr(expr)
 
     /**
+     * Render procedure-call arguments coerced to each declared parameter type — the Java twin of
+     * AsmEmitter.emitProcArgs (G10). An INTEGER (`long`) argument into a DECIMAL/MONEY parameter is
+     * widened to BigDecimal (else javac rejects `long`→BigDecimal); into a SMALLINT (`int`) slot it
+     * is narrowed with `(int)`. `params` is null when the procedure can't be resolved (defensive) —
+     * fall back to a bare emit, exactly as before. Same per-arg coercion as the ASM backend (P1).
+     */
+    private fun emitProcArgs(args: List<Expression>, params: List<Symbol.ProcedureSymbol.Param>?): String =
+        args.mapIndexed { i, arg ->
+            when (val p = params?.getOrNull(i)?.type) {
+                is KobolType.DecimalType, is KobolType.MoneyType -> emitExprFor(p, arg)
+                is KobolType.SmallIntType ->
+                    if (checker.typeOf(arg) is KobolType.IntegerType) "(int)(${emitExpr(arg)})" else emitExpr(arg)
+                else -> emitExpr(arg)
+            }
+        }.joinToString(", ")
+
+    /**
      * Full static type of a reference, walking any field chain — so a record-field
      * target like `invoice.amount` resolves to the field's DECIMAL type, not the
      * record's. O(depth) in the number of `.`-separated parts.
@@ -786,7 +807,13 @@ class JavaTranspiler(
             "DISPLAY_STYLED"      -> "dev.kobol.runtime.KobolDisplay.styled(${args[0]}, ${args[1]}, ${args[2]}, ${args[3]})"
             "DISPLAY_XML"         -> "dev.kobol.stdlib.KobolXml.toXml(${args[0]})"
             "DISPLAY_XML_PRETTY"  -> "dev.kobol.stdlib.KobolXml.toPrettyXml(${args[0]})"
-            else             -> "${expr.name}(${args.joinToString(", ")})"
+            // User-defined procedure called in expression position (e.g. COMPUTE x = Fee(5)) — coerce
+            // each arg to the declared param type so an INTEGER literal into a DECIMAL param widens
+            // to BigDecimal, mirroring the PERFORM path (G10). Unresolved → bare emit, as before.
+            else -> {
+                val sym = checker.symbols.resolve(expr.name) as? Symbol.ProcedureSymbol
+                "${expr.name}(${emitProcArgs(expr.args, sym?.params)})"
+            }
         }
     }
 

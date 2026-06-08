@@ -268,6 +268,40 @@ class SpecGapFixesTest {
         assertTrue(threw, "ASSERT RAISES must fail (AssertionError) when nothing is raised")
     }
 
+    // ── G10: INTEGER-literal argument into a DECIMAL/MONEY parameter ────────
+    @Test fun `G10 PERFORM USING int literal into a DECIMAL param widens, no ASM frame error`() {
+        val out = compileAndRun("""
+            PROGRAM T
+            PROCEDURE ChargeCard USING amount : DECIMAL(10, 2):
+              IF amount <= 0:
+                RAISE ApplicationError "amount must be positive"
+              END-IF
+              DISPLAY "charged " amount
+            END-PROCEDURE
+            PROCEDURE Main:
+              PERFORM ChargeCard USING 42
+              ASSERT RAISES ApplicationError: PERFORM ChargeCard USING -5
+              DISPLAY "g10-ok"
+            END-PROCEDURE
+        """)
+        assertTrue("charged " in out, "int 42 must widen to DECIMAL and run: $out")
+        assertTrue("g10-ok" in out, "ASSERT RAISES with int -5 arg must pass + continue: $out")
+    }
+
+    @Test fun `G10 COMPUTE captures a DECIMAL-returning proc called with an int literal arg`() {
+        val out = compileAndRun("""
+            PROGRAM T2
+            PROCEDURE WithTax USING base : DECIMAL(10, 2) RETURNING DECIMAL(10, 2):
+              RETURN base + 1.00
+            END-PROCEDURE
+            PROCEDURE Main:
+              LET total = WithTax(10)
+              DISPLAY "total " total
+            END-PROCEDURE
+        """, name = "T2")
+        assertTrue("11.00" in out, "int arg into DECIMAL param of a RETURNING proc must widen: $out")
+    }
+
     // ── G8: MUST MATCH regex quantifier — escaped + raw forms compile ───────
     @Test fun `G8 MUST MATCH accepts escaped braces and raw strings`() {
         // Escaped braces in an interpolating string (spec §19.1 canonical form):
