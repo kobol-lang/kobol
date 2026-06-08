@@ -223,7 +223,14 @@ internal fun AsmEmitter.emitLiteral(mv: MethodVisitor, lit: Literal) {
      * Stack before call: ..., lhs: BigDecimal, rhs: BigDecimal
      * Stack after call:  ..., result: BigDecimal
      */
-internal fun AsmEmitter.emitBigDecimalOp(mv: MethodVisitor, op: String) {
+internal fun AsmEmitter.emitBigDecimalOp(mv: MethodVisitor, op: String, roundingMode: String? = null) {
+        // §12.2 DIVIDE-USING: an explicit rounding mode overrides the active MathContext (the user
+        // chose the rounding on this expression). Stack: lhs, rhs → push mode → divide(BD,RoundingMode).
+        if (op == "divide" && roundingMode != null) {
+            mv.visitFieldInsn(GETSTATIC, ROUNDING, roundingMode.replace('-', '_'), "Ljava/math/RoundingMode;")
+            mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, op, "(L$BIGDECIMAL;Ljava/math/RoundingMode;)L$BIGDECIMAL;", false)
+            return
+        }
         mv.visitMethodInsn(INVOKESTATIC, MATH_CTX, "current", "()L$JMATH_CTX;", false)
         val lNoCtx = Label(); val lDone = Label()
         mv.visitInsn(DUP)
@@ -309,7 +316,8 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr, con
                           expr.op == BinaryOp.POWER) &&
                          lType.isNumeric() && rType.isNumeric()
         val numeric = lType is KobolType.MoneyType || lType is KobolType.DecimalType ||
-                      rType is KobolType.MoneyType || rType is KobolType.DecimalType || ctxDecimal
+                      rType is KobolType.MoneyType || rType is KobolType.DecimalType || ctxDecimal ||
+                      expr.dividingMode != null   // §12.2 DIVIDE-USING forces the decimal path even for int operands
 
         if (numeric) {
             emitExpr(ctx, expr.left)
@@ -320,7 +328,7 @@ internal fun AsmEmitter.emitBinaryExpr(ctx: MethodContext, expr: BinaryExpr, con
                 BinaryOp.ADD      -> emitBigDecimalOp(mv, "add")
                 BinaryOp.SUBTRACT -> emitBigDecimalOp(mv, "subtract")
                 BinaryOp.MULTIPLY -> emitBigDecimalOp(mv, "multiply")
-                BinaryOp.DIVIDE   -> emitBigDecimalOp(mv, "divide")
+                BinaryOp.DIVIDE   -> emitBigDecimalOp(mv, "divide", expr.dividingMode)
                 // compareTo (not equals) so scale differs but value matches → equal,
                 // e.g. 124.99 == 124.990. emitCompareFlag normalizes to a 0/1 boolean.
                 BinaryOp.EQ  -> { mv.visitMethodInsn(INVOKEVIRTUAL, BIGDECIMAL, "compareTo", "(L$BIGDECIMAL;)I", false); emitCompareFlag(mv, IFEQ) }
@@ -532,6 +540,8 @@ internal fun AsmEmitter.emitBuiltin(ctx: MethodContext, expr: BuiltinCall) {
                 }
             }
             "IS-BLANK"   -> { args.forEach { emitExpr(ctx, it) }; mv.visitMethodInsn(INVOKESTATIC, TEXT_OWN, "isBlank",   "($S)Z", false) }
+            // §27.1 CONFIRM "msg" — interactive yes/no prompt → boolean (reads stdin).
+            "CONFIRM"    -> { emitExprAsString(ctx, args[0]); mv.visitMethodInsn(INVOKESTATIC, "dev/kobol/runtime/KobolEnv", "confirm", "($S)Z", false) }
             "IS-EMPTY"   -> {
                 val t = if (args.isNotEmpty()) inferExprType(args[0]) else KobolType.UnknownType
                 emitExpr(ctx, args[0])

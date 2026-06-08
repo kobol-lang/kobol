@@ -118,6 +118,21 @@ internal fun Parser.parseNamedConditionDecl(): NamedConditionDecl {
     // Type specifications
     // -------------------------------------------------------------------------
 
+/**
+ * Parse a hyphenated algorithm name like `AES-256-GCM`. The lexer splits it into
+ * `AES` `-` `256` `-` `GCM` (a hyphen before a digit does not continue an identifier), so we
+ * re-join identifier/number segments separated by `-` into one canonical string.
+ */
+internal fun Parser.parseAlgorithmName(): String {
+        val sb = StringBuilder(expectAnyIdentifier("Expected algorithm name"))
+        while (check(MINUS)) {
+            advance()
+            sb.append('-')
+            sb.append(if (check(INTEGER_LIT)) advance().value else expectAnyIdentifier("Expected algorithm segment after '-'"))
+        }
+        return sb.toString()
+    }
+
 internal fun Parser.parseTypeSpec(): TypeSpec {
         val p = currentPos()
         return when {
@@ -139,7 +154,16 @@ internal fun Parser.parseTypeSpec(): TypeSpec {
             match(TEXT)     -> {
                 val maxLen = if (check(LPAREN)) { advance(); val n = expectInt(); expect(RPAREN,"Expected ')'"); n } else null
                 val sensitive = if (check(SENSITIVE)) { advance(); true } else false
-                TypeSpec.TextType(maxLen, sensitive, p)
+                // §19.3 ENCRYPTED USING <alg> KEY <var> — field-level encryption metadata.
+                var alg: String? = null
+                var key: String? = null
+                if (sensitive && matchKeywordValue("ENCRYPTED")) {
+                    if (!match(USING)) throw error("Expected USING after ENCRYPTED")
+                    alg = parseAlgorithmName()
+                    if (!match(KEY)) throw error("Expected KEY after `ENCRYPTED USING <alg>`")
+                    key = expectIdent("Expected key variable name after KEY")
+                }
+                TypeSpec.TextType(maxLen, sensitive, p, encryptedAlg = alg, encryptKey = key)
             }
             match(LIST)     -> { expect(OF, "Expected OF after LIST"); TypeSpec.ListOf(parseTypeSpec(), p) }
             match(FUTURE)   -> { expect(OF, "Expected OF after FUTURE"); TypeSpec.FutureOf(parseTypeSpec(), p) }

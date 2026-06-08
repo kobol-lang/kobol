@@ -79,6 +79,7 @@ class JavaTranspiler(
         blank()
         line("public static void main(String[] args) {")
         indent++
+        line("dev.kobol.runtime.KobolEnv.setArgs(args);")   // §27.1 ACCEPT FROM ARGUMENT
         if (mainProc != null) line("${javaIdent(mainProc.name)}();")
         else                  line("// No MAIN procedure found")
         indent--
@@ -164,6 +165,7 @@ class JavaTranspiler(
     private fun emitStatement(stmt: Statement) {
         when (stmt) {
             is MoveStatement     -> line("${emitRef(stmt.to)} = ${emitExprFor(refType(stmt.to), stmt.from)};")
+            is AcceptStatement   -> emitAccept(stmt)
             is ComputeStatement  -> line("${emitRef(stmt.target)} = ${emitExprFor(refType(stmt.target), stmt.expr)};")
             is MapPutStatement   -> line("${emitRef(stmt.map)}.put(${emitExpr(stmt.key)}, ${emitExpr(stmt.value)});")
             is MapGetStatement   -> {
@@ -234,8 +236,12 @@ class JavaTranspiler(
                 line("dev.kobol.stdlib.KobolJson.$method(${emitExpr(stmt.value)}, ${emitExpr(stmt.filepath)});")
             }
             is WriteXmlStatement -> {
-                val method = if (stmt.pretty) "writePrettyToFile" else "writeToFile"
-                line("dev.kobol.stdlib.KobolXml.$method(${emitExpr(stmt.value)}, ${emitExpr(stmt.filepath)});")
+                if (stmt.rootName != null) {
+                    line("dev.kobol.stdlib.KobolXml.writeWithRoot(${emitExpr(stmt.value)}, ${emitExpr(stmt.filepath)}, ${emitExpr(stmt.rootName)}, ${stmt.pretty});")
+                } else {
+                    val method = if (stmt.pretty) "writePrettyToFile" else "writeToFile"
+                    line("dev.kobol.stdlib.KobolXml.$method(${emitExpr(stmt.value)}, ${emitExpr(stmt.filepath)});")
+                }
             }
             is ParseJsonStatement -> {
                 if (stmt.asList) {
@@ -250,6 +256,11 @@ class JavaTranspiler(
                 if (stmt.asList) {
                     val method = if (stmt.fromFile) "parseFileElements" else "parseXmlElements"
                     line("${emitRef(stmt.into)} = dev.kobol.stdlib.KobolXml.$method(${emitExpr(stmt.source)});")
+                } else if (stmt.namespaces.isNotEmpty()) {
+                    // §30.3 — validate the root namespace against the declared URIs.
+                    val uris   = stmt.namespaces.joinToString(", ") { emitExpr(it.second) }
+                    val method = if (stmt.fromFile) "parseFileIntoNamespaces" else "parseIntoNamespaces"
+                    line("dev.kobol.stdlib.KobolXml.$method(${emitRef(stmt.into)}, ${emitExpr(stmt.source)}, new String[]{$uris});")
                 } else {
                     val method = if (stmt.fromFile) "parseFileInto" else "parseInto"
                     line("dev.kobol.stdlib.KobolXml.$method(${emitRef(stmt.into)}, ${emitExpr(stmt.source)});")
@@ -498,6 +509,12 @@ class JavaTranspiler(
     }
 
     private fun emitDisplay(stmt: DisplayStatement) {
+        // §27.2 DISPLAY PROGRESS renders in-place to stderr (void), not via println.
+        val only = stmt.values.singleOrNull()
+        if (only is BuiltinCall && only.name == "DISPLAY_PROGRESS") {
+            line("dev.kobol.runtime.KobolDisplay.progress((long)(${emitExpr(only.args[0])}), (long)(${emitExpr(only.args[1])}), ${emitExpr(only.args[2])});")
+            return
+        }
         val arg = stmt.values.joinToString(" + \" \" + ") { emitDisplayArg(it) }
         line("System.out.println($arg);")
     }
@@ -616,7 +633,7 @@ class JavaTranspiler(
      */
     private fun emitBinary(expr: BinaryExpr): String {
         val decimal = (expr.op in DECIMAL_OPS) &&
-            (isDecimalExpr(expr.left) || isDecimalExpr(expr.right))
+            (isDecimalExpr(expr.left) || isDecimalExpr(expr.right) || expr.dividingMode != null)
         if (decimal) return emitDecimalBinary(expr)
 
         val l = emitExpr(expr.left)
@@ -653,7 +670,9 @@ class JavaTranspiler(
             BinaryOp.ADD      -> "($mc != null ? $l.add($r, $mc) : $l.add($r))"
             BinaryOp.SUBTRACT -> "($mc != null ? $l.subtract($r, $mc) : $l.subtract($r))"
             BinaryOp.MULTIPLY -> "($mc != null ? $l.multiply($r, $mc) : $l.multiply($r))"
-            BinaryOp.DIVIDE   -> "($mc != null ? $l.divide($r, $mc) : $l.divide($r, java.math.RoundingMode.HALF_EVEN))"
+            BinaryOp.DIVIDE   ->
+                if (expr.dividingMode != null) "$l.divide($r, java.math.RoundingMode.${expr.dividingMode.replace('-', '_')})"
+                else "($mc != null ? $l.divide($r, $mc) : $l.divide($r, java.math.RoundingMode.HALF_EVEN))"
             // BigDecimal.pow takes an int exponent; emit the raw (long) exponent cast to int.
             BinaryOp.POWER    -> "$l.pow((int)(${emitExpr(expr.right)}))"
             else -> error("emitDecimalBinary: ${expr.op} not a decimal op")
@@ -732,6 +751,7 @@ class JavaTranspiler(
             }
             "ROUND-WITH-MODE" -> "KobolDecimal.roundWithMode(${args[0]}, (int)${args[1]}, ${args[2]})"
             "IS-BLANK"        -> "KobolText.isBlank(${args[0]})"
+            "CONFIRM"         -> "dev.kobol.runtime.KobolEnv.confirm(${args[0]})"
             "IS-EMPTY"        -> "${args[0]}.isEmpty()"
             "IS-POSITIVE"     -> "dev.kobol.stdlib.KobolMath.isPositive(${args[0]})"
             "IS-NEGATIVE"     -> "dev.kobol.stdlib.KobolMath.isNegative(${args[0]})"
@@ -775,6 +795,28 @@ class JavaTranspiler(
         val lastStage = expr.stages.lastOrNull()
         if (lastStage !is PipelineStage.SumStage) chain += ".collect(java.util.stream.Collectors.toList())"
         return chain
+    }
+
+    /** §27.1 ACCEPT — read raw String (terminal/argument), coerce to the target type, assign. */
+    private fun emitAccept(stmt: AcceptStatement) {
+        val name = stmt.target.parts.last()
+        val raw = if (stmt.fromTerminal) {
+            "dev.kobol.runtime.KobolEnv.acceptTerminal(${emitExpr(stmt.source)})"
+        } else {
+            val def = stmt.default?.let { "String.valueOf(${emitExpr(it)})" } ?: "\"\""
+            "dev.kobol.runtime.KobolEnv.acceptArgument(${emitExpr(stmt.source)}, $def)"
+        }
+        val env = "dev.kobol.runtime.KobolEnv"
+        val coerced = when (refType(stmt.target)) {
+            is KobolType.IntegerType                         -> "$env.toLong($raw, \"$name\")"
+            is KobolType.DecimalType, is KobolType.MoneyType -> "$env.toDecimal($raw, \"$name\")"
+            is KobolType.BooleanType                         -> "$env.toBoolean($raw, \"$name\")"
+            is KobolType.DateType                            -> "$env.toDate($raw, \"$name\")"
+            is KobolType.TimeType                            -> "$env.toTime($raw, \"$name\")"
+            is KobolType.DateTimeType                        -> "$env.toDateTime($raw, \"$name\")"
+            else                                             -> raw   // TEXT / unknown
+        }
+        line("${emitRef(stmt.target)} = $coerced;")
     }
 
     private fun emitRef(ref: Reference): String {

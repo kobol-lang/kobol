@@ -654,6 +654,10 @@ class AsmEmitter(
         val syntheticProc = ProcedureDecl("__main__", emptyList(), null, emptyList(), program.pos)
         val ctx = MethodContext(mv, owner, syntheticProc)
 
+        // Capture argv for ACCEPT ... FROM ARGUMENT (spec §27.1), readable from any procedure.
+        mv.visitVarInsn(ALOAD, 0)
+        mv.visitMethodInsn(INVOKESTATIC, "dev/kobol/runtime/KobolEnv", "setArgs", "([Ljava/lang/String;)V", false)
+
         // Load CONFIG section values from env / .env file (before DATA defaults
         // so DATA initializers can reference config values if needed).
         program.configSection?.items?.forEach { item ->
@@ -684,6 +688,7 @@ class AsmEmitter(
     internal fun emitStatement(ctx: MethodContext, stmt: Statement) {
         val mv = ctx.mv
         when (stmt) {
+            is AcceptStatement   -> emitAccept(ctx, stmt)
             is DisplayStatement  -> emitDisplay(ctx, stmt)
             is ComputeStatement  -> emitCompute(ctx, stmt)
             is LocalVarDecl      -> emitLocalVarDecl(ctx, stmt)
@@ -753,8 +758,15 @@ class AsmEmitter(
                     else -> {}
                 }
                 emitExpr(ctx, stmt.filepath)
-                val methodName = if (stmt.pretty) "writePrettyToFile" else "writeToFile"
-                mv.visitMethodInsn(INVOKESTATIC, XML_OWN, methodName, "(Ljava/lang/Object;Ljava/lang/String;)V", false)
+                if (stmt.rootName != null) {
+                    // §30.1 ROOT "name" — explicit root tag via writeWithRoot(value, path, root, pretty).
+                    emitExpr(ctx, stmt.rootName)
+                    mv.visitInsn(if (stmt.pretty) ICONST_1 else ICONST_0)
+                    mv.visitMethodInsn(INVOKESTATIC, XML_OWN, "writeWithRoot", "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Z)V", false)
+                } else {
+                    val methodName = if (stmt.pretty) "writePrettyToFile" else "writeToFile"
+                    mv.visitMethodInsn(INVOKESTATIC, XML_OWN, methodName, "(Ljava/lang/Object;Ljava/lang/String;)V", false)
+                }
             }
             is ParseJsonStatement -> {
                 val JSON_OWN = "dev/kobol/stdlib/KobolJson"
@@ -780,6 +792,20 @@ class AsmEmitter(
                     val method = if (stmt.fromFile) "parseFileElements" else "parseXmlElements"
                     mv.visitMethodInsn(INVOKESTATIC, XML_OWN, method, "(Ljava/lang/String;)Ljava/util/ArrayList;", false)
                     emitStore(ctx, stmt.into)
+                } else if (stmt.namespaces.isNotEmpty()) {
+                    // §30.3 — load target, source, then a String[] of declared namespace URIs.
+                    loadRef(ctx, stmt.into)
+                    emitExpr(ctx, stmt.source)
+                    mv.visitLdcInsn(stmt.namespaces.size)
+                    mv.visitTypeInsn(ANEWARRAY, "java/lang/String")
+                    stmt.namespaces.forEachIndexed { i, (_, uriExpr) ->
+                        mv.visitInsn(DUP)
+                        mv.visitLdcInsn(i)
+                        emitExprAsString(ctx, uriExpr)
+                        mv.visitInsn(AASTORE)
+                    }
+                    val method = if (stmt.fromFile) "parseFileIntoNamespaces" else "parseIntoNamespaces"
+                    mv.visitMethodInsn(INVOKESTATIC, XML_OWN, method, "(Ljava/lang/Object;Ljava/lang/String;[Ljava/lang/String;)V", false)
                 } else {
                     loadRef(ctx, stmt.into)
                     emitExpr(ctx, stmt.source)

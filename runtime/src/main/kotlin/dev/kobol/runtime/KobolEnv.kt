@@ -69,6 +69,61 @@ object KobolEnv {
         )
 
     // -------------------------------------------------------------------------
+    //  Interactive terminal input (spec §27.1) — ACCEPT / CONFIRM
+    // -------------------------------------------------------------------------
+
+    /**
+     * §27.1 `CONFIRM "msg"` — print the prompt and read a yes/no answer from stdin.
+     * Returns true only for `y`/`yes` (case-insensitive). EOF / no input → false (safe default:
+     * a non-interactive run never silently confirms a destructive action).
+     */
+    @JvmStatic
+    fun confirm(message: String): Boolean {
+        print("$message [y/N] ")
+        System.out.flush()
+        val line = readlnOrNull()?.trim()?.lowercase() ?: return false
+        return line == "y" || line == "yes"
+    }
+
+    /**
+     * §27.1 `ACCEPT v FROM TERMINAL PROMPT "msg"` — print the prompt, read one line from stdin.
+     * EOF → empty string (the program decides how to handle a missing answer).
+     */
+    @JvmStatic
+    fun acceptTerminal(prompt: String): String {
+        print(prompt)
+        System.out.flush()
+        return readlnOrNull() ?: ""
+    }
+
+    /** Program argv, captured by the generated `main` via [setArgs] so any procedure can read it. */
+    @Volatile private var programArgs: Array<String> = emptyArray()
+
+    /** Called once at the top of generated `main(String[])` — stores argv for ACCEPT FROM ARGUMENT. */
+    @JvmStatic
+    fun setArgs(args: Array<String>) { programArgs = args }
+
+    /**
+     * §27.1 `ACCEPT v FROM ARGUMENT "--name" [DEFAULT d]` — read a command-line argument value
+     * from the argv captured by [setArgs]. Supports both `--name value` (two tokens) and
+     * `--name=value` forms. Returns [default] when the flag is absent.
+     */
+    @JvmStatic
+    fun acceptArgument(flag: String, default: String): String {
+        val args = programArgs
+        var i = 0
+        while (i < args.size) {
+            val a = args[i]
+            when {
+                a == flag && i + 1 < args.size -> return args[i + 1]
+                a.startsWith("$flag=")        -> return a.substring(flag.length + 1)
+            }
+            i++
+        }
+        return default
+    }
+
+    // -------------------------------------------------------------------------
     //  Type coercion helpers — called by generated config-loading bytecode
     // -------------------------------------------------------------------------
 

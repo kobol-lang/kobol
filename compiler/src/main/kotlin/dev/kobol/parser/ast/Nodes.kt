@@ -67,7 +67,15 @@ sealed class TypeSpec {
     data class SmallIntType(val pos: SourcePosition) : TypeSpec()
     data class DecimalType(val precision: Int, val scale: Int, val pos: SourcePosition) : TypeSpec()
     data class MoneyType(val precision: Int, val scale: Int, val pos: SourcePosition) : TypeSpec()
-    data class TextType(val maxLength: Int?, val sensitive: Boolean = false, val pos: SourcePosition) : TypeSpec()
+    data class TextType(
+        val maxLength: Int?,
+        val sensitive: Boolean = false,
+        val pos: SourcePosition,
+        /** §19.3 `ENCRYPTED USING <alg> KEY <var>` — encryption algorithm name, e.g. "AES-256-GCM". */
+        val encryptedAlg: String? = null,
+        /** §19.3 key-source variable name for field-level encryption. */
+        val encryptKey: String? = null,
+    ) : TypeSpec()
     data class BooleanType(val pos: SourcePosition) : TypeSpec()
     data class DateType(val pos: SourcePosition) : TypeSpec()
     data class TimeType(val pos: SourcePosition) : TypeSpec()
@@ -388,12 +396,26 @@ data class WriteJsonStatement(
     override val pos: SourcePosition,
 ) : Statement()
 
-/** WRITE XML expr TO filepath [PRETTY] */
+/**
+ * §27.1 ACCEPT target FROM (TERMINAL PROMPT lit | ARGUMENT lit [DEFAULT lit]).
+ * The raw String is coerced to the target's declared type at codegen (reusing the CONFIG coercions).
+ */
+data class AcceptStatement(
+    val target: Reference,
+    val fromTerminal: Boolean,    // true = TERMINAL PROMPT, false = ARGUMENT
+    val source: Expression,       // prompt text (TERMINAL) or flag name (ARGUMENT)
+    val default: Expression?,     // ARGUMENT ... DEFAULT
+    override val pos: SourcePosition,
+) : Statement()
+
+/** WRITE XML expr TO filepath [PRETTY] [ROOT "name"] */
 data class WriteXmlStatement(
     val value: Expression,
     val filepath: Expression,
     val pretty: Boolean = false,
     override val pos: SourcePosition,
+    /** §30.1 ROOT "name" — overrides the root element tag. Null = derive from value's type. */
+    val rootName: Expression? = null,
 ) : Statement()
 
 /** PARSE JSON [FILE] source INTO ref [AS TypeName | AS LIST [OF TypeName]] */
@@ -406,7 +428,7 @@ data class ParseJsonStatement(
     override val pos: SourcePosition,
 ) : Statement()
 
-/** PARSE XML [FILE] source INTO ref [AS TypeName | AS LIST [OF TypeName]] */
+/** PARSE XML [FILE] source INTO ref [AS TypeName | AS LIST [OF TypeName]] [NAMESPACES "p" : uri, …] */
 data class ParseXmlStatement(
     val source: Expression,
     val fromFile: Boolean,
@@ -414,6 +436,8 @@ data class ParseXmlStatement(
     val asTypeName: String? = null,
     val asList: Boolean = false,
     override val pos: SourcePosition,
+    /** §30.3 prefix→namespace-URI mappings; the root element's namespace is validated against them. */
+    val namespaces: List<Pair<String, Expression>> = emptyList(),
 ) : Statement()
 
 /** WITH PRECISION precisionName [ROUNDING mode]: body END-PRECISION */
@@ -625,6 +649,8 @@ data class BinaryExpr(
     val left: Expression,
     val right: Expression,
     override val pos: SourcePosition,
+    /** §12.2 `DIVIDE-USING <mode> BY` — per-expression rounding override for `/`. Null = HALF-EVEN default. */
+    val dividingMode: String? = null,
 ) : Expression()
 
 data class UnaryExpr(

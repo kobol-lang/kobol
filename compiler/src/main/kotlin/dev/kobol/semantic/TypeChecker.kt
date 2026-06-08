@@ -475,9 +475,23 @@ class TypeChecker(
                 checkExpr(stmt.returns)
             }
 
+            is AcceptStatement -> {
+                // Target must exist; its declared type drives the String→type coercion at codegen.
+                val targetType = resolveRefType(stmt.target)
+                checkExpr(stmt.source)
+                stmt.default?.let { checkExpr(it) }
+                val ok = targetType is KobolType.TextType || targetType is KobolType.IntegerType ||
+                         targetType is KobolType.DecimalType || targetType is KobolType.MoneyType ||
+                         targetType is KobolType.BooleanType || targetType is KobolType.DateType ||
+                         targetType is KobolType.TimeType || targetType is KobolType.DateTimeType ||
+                         targetType is KobolType.UnknownType
+                if (!ok) error("E109", "ACCEPT target must be TEXT/INTEGER/DECIMAL/MONEY/BOOLEAN/DATE/TIME/DATETIME, got $targetType", stmt.pos)
+            }
+
             is WriteXmlStatement -> {
                 checkExpr(stmt.value)
                 checkExpr(stmt.filepath)
+                stmt.rootName?.let { checkExpr(it) }
             }
 
             is ParseJsonStatement -> {
@@ -496,6 +510,7 @@ class TypeChecker(
                 if (srcType !is KobolType.TextType && srcType !is KobolType.UnknownType) {
                     error("E107", "PARSE XML source must be TEXT, got $srcType", stmt.pos)
                 }
+                stmt.namespaces.forEach { checkExpr(it.second) }   // §30.3 namespace URI expressions
                 if (stmt.asTypeName != null) {
                     val sym = symbols.resolve(stmt.asTypeName)
                     if (sym == null) error("E109", "Unknown type '${stmt.asTypeName}' in PARSE XML AS clause", stmt.pos)
@@ -1025,7 +1040,10 @@ class TypeChecker(
         }
 
         is UnaryExpr -> when (expr.op) {
-            UnaryOp.NOT    -> KobolType.BooleanType
+            // Check the operand even though the result is always BOOLEAN: skipping it left the
+            // operand subtree (e.g. an interpolated string in `NOT CONFIRM "...{n}..."`) without
+            // recorded types, so codegen fell back to Object.toString(long) → VerifyError.
+            UnaryOp.NOT    -> { checkExpr(expr.operand); KobolType.BooleanType }
             UnaryOp.NEGATE -> checkExpr(expr.operand)
         }
 
@@ -1210,7 +1228,7 @@ class TypeChecker(
             "SPLIT"                                        -> KobolType.ListType(KobolType.TextType(null))
             "LENGTH", "FIND", "SCALE-OF", "PRECISION-OF"        -> KobolType.IntegerType
             "CONTAINS", "STARTS-WITH", "ENDS-WITH",
-            "IS-BLANK", "IS-EMPTY"                         -> KobolType.BooleanType
+            "IS-BLANK", "IS-EMPTY", "CONFIRM"              -> KobolType.BooleanType
             "IS-POSITIVE", "IS-NEGATIVE", "IS-ZERO"         -> KobolType.BooleanType
 
             // ── KobolMath ─────────────────────────────────────────────────
@@ -1245,7 +1263,7 @@ class TypeChecker(
 
             "DISPLAY_TABLE", "DISPLAY_LABEL", "DISPLAY_FORMAT",
             "DISPLAY_JSON", "DISPLAY_JSON_PRETTY",
-            "DISPLAY_STYLED",
+            "DISPLAY_STYLED", "DISPLAY_PROGRESS",
             "DISPLAY_XML", "DISPLAY_XML_PRETTY"             -> KobolType.VoidType
             else -> {
                 // Variant case construction: Shipped("X") / Shipped(tracking: "X") — #18

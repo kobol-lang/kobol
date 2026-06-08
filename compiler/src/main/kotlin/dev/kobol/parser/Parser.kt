@@ -218,6 +218,7 @@ class Parser(
             SUBTRACT   -> parseSubtractStatement()
             MULTIPLY   -> parseMultiplyStatement()
             DIVIDE     -> parseDivideStatement()
+            ACCEPT     -> parseAcceptStatement()
             DISPLAY    -> parseDisplayStatement()
             PERFORM, DO -> parsePerformStatement()
             IF         -> parseIfStatement()

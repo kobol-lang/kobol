@@ -66,6 +66,17 @@ internal fun Parser.parseAddExpr(): Expression {
 internal fun Parser.parseMulExpr(): Expression {
         var left = parsePowerExpr()
         while (true) {
+            // §12.2 prose division with explicit rounding: `<dividend> DIVIDE-USING <mode> BY <divisor>`.
+            // `DIVIDE-USING` lexes as one IDENTIFIER (DIVIDE + `-USING`); lowers to a DIVIDE BinaryExpr
+            // carrying the mode, so it reuses every operand-coercion + decimal path that `/` uses (P6).
+            if (check(IDENTIFIER) && peek().value == "DIVIDE-USING") {
+                val p = left.pos
+                advance() // DIVIDE-USING
+                val mode = parseRoundingMode("DIVIDE-USING")
+                if (!matchKeywordValue("BY")) throw error("Expected BY in `<dividend> DIVIDE-USING <mode> BY <divisor>`")
+                left = BinaryExpr(BinaryOp.DIVIDE, left, parsePowerExpr(), p, dividingMode = mode)
+                continue
+            }
             val op = when { match(STAR) -> BinaryOp.MULTIPLY; match(SLASH) -> BinaryOp.DIVIDE; else -> break }
             left = BinaryExpr(op, left, parsePowerExpr(), left.pos)
         }
@@ -186,6 +197,12 @@ internal fun Parser.parseProseStringOp(): Expression? {
     }
     if (tok.type != IDENTIFIER || peek(1).type == LPAREN) return null
     val name = tok.value
+    // §27.1 CONFIRM "msg" — yes/no prompt, yields BOOLEAN. Prose form only (call form CONFIRM(x)
+    // would be a user proc); fires when followed by an expression atom, e.g. `IF NOT CONFIRM "…"`.
+    if (name == "CONFIRM" && canStartExprAtomAt(1)) {
+        advance()  // CONFIRM
+        return BuiltinCall("CONFIRM", listOf(parseUnaryExpr()), p)
+    }
     if (name == "SUBSTRING" && canStartExprAtomAt(1)) {
         advance()  // SUBSTRING
         val s = parseUnaryExpr()

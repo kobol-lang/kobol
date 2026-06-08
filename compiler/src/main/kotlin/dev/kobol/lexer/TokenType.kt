@@ -6,6 +6,7 @@ package dev.kobol.lexer
  */
 enum class TokenType {
     // ---- Keywords ----
+    ACCEPT,
     ADD, ALL, AND, AS, ASYNC, AUTHOR,
     AWAIT, BOOLEAN,
     CALL, CLOSE, KOBOL, COMBINE, COMPUTE, CONCURRENT, CONDITION, CONFIG,

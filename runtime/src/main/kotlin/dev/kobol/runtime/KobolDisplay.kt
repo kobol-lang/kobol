@@ -59,6 +59,33 @@ object KobolDisplay {
             "WHITE"   -> codes.add("37")
         }
         if (codes.isEmpty()) return text
-        return "\u001B[${codes.joinToString(";")}m$text\u001B[0m"
+        return "[${codes.joinToString(";")}m$text[0m"
+    }
+
+    /**
+     * DISPLAY PROGRESS processed OF total MESSAGE msg (spec §27.2).
+     * Pure renderer — produces e.g. `Processing  [=====>    ] 52/100 (52%)`.
+     * Split from [progress] so the formatting is unit-testable without a TTY.
+     */
+    @JvmStatic fun renderProgress(processed: Long, total: Long, message: String): String {
+        val pct    = if (total > 0L) processed * 100L / total else 0L
+        val width  = 10
+        val filled = if (total > 0L) ((processed * width) / total).toInt().coerceIn(0, width) else 0
+        val bar = buildString {
+            repeat(filled) { append('=') }
+            if (filled < width) { append('>'); repeat(width - filled - 1) { append(' ') } }
+        }
+        val head = if (message.isEmpty()) "" else "$message  "
+        return "$head[$bar] $processed/$total ($pct%)"
+    }
+
+    /**
+     * Render a live progress bar to stderr, updating in-place (`\r`). Suppressed when stderr is
+     * not a TTY (CI pipelines) — per spec §27.2, so logs are not polluted with carriage returns.
+     */
+    @JvmStatic fun progress(processed: Long, total: Long, message: String) {
+        if (System.console() == null) return   // not an interactive terminal — suppress
+        System.err.print("\r" + renderProgress(processed, total, message))
+        System.err.flush()
     }
 }

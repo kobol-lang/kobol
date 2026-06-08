@@ -92,6 +92,27 @@ internal fun AsmEmitter.emitConfigLoad(ctx: AsmEmitter.MethodContext, item: Conf
     }
 }
 
+/**
+ * §27.1 ACCEPT — read a raw String (terminal prompt or CLI argument), coerce it to the target's
+ * declared type via the same [emitStringToKobolType] helper CONFIG uses, then store into the target.
+ */
+internal fun AsmEmitter.emitAccept(ctx: AsmEmitter.MethodContext, stmt: dev.kobol.parser.ast.AcceptStatement) {
+    val mv         = ctx.mv
+    val targetType = checker.typeOfReference(stmt.target)
+    if (stmt.fromTerminal) {
+        emitExpr(ctx, stmt.source)
+        mv.visitMethodInsn(INVOKESTATIC, KOBOL_ENV, "acceptTerminal",
+            "(Ljava/lang/String;)Ljava/lang/String;", false)
+    } else {
+        emitExpr(ctx, stmt.source)
+        if (stmt.default != null) emitExprAsString(ctx, stmt.default) else mv.visitLdcInsn("")
+        mv.visitMethodInsn(INVOKESTATIC, KOBOL_ENV, "acceptArgument",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", false)
+    }
+    emitStringToKobolType(mv, targetType, stmt.target.parts.last())
+    emitStore(ctx, stmt.target)
+}
+
 // -------------------------------------------------------------------------
 //  Helpers
 // -------------------------------------------------------------------------
@@ -101,7 +122,7 @@ internal fun AsmEmitter.emitConfigLoad(ctx: AsmEmitter.MethodContext, item: Conf
  * Emits the call to the appropriate [KobolEnv.toXxx] static method,
  * leaving the converted value on the stack.
  */
-private fun emitStringToKobolType(mv: MethodVisitor, kType: KobolType, configName: String) {
+internal fun emitStringToKobolType(mv: MethodVisitor, kType: KobolType, configName: String) {
     when (kType) {
         is KobolType.TextType -> { /* String is already the right type */ }
 

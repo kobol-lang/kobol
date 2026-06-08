@@ -60,37 +60,37 @@ Invalid: `-name`, `name-`, `3rd-field`
 > variable, procedure, etc.). Multi-word terminators (`END-IF`, …) are single tokens.
 
 ```
-ADD             ALL             AND             AS              ASSERT
-ASYNC           AT              AUTHOR          AWAIT           BODY
-BOOLEAN         CACHE           CALL            CLOSE           COMBINE
-COMPUTE         CONCURRENT      CONDITION       CONFIG          COUNT
-DATA            DATABASE        DATE            DATETIME        DEBUG
-DECIMAL         DEFINE          DELETE          DEPRECATED      DISPLAY
-DIVIDE          DO              EACH            ELSE            END-CONCURRENT
-END-CONFIG      END-FOR         END-IF          END-MATCH       END-MODULE
-END-PERFORM     END-PRECISION   END-PROCEDURE   END-PROGRAM     END-RECORD
-END-SERVER      END-TEST        END-TRY         END-VALIDATE    END-VARIANT
-END-WHILE       END-WITH        ENDPOINT        ENSURE          ERROR
-EXCEPT          EXPIRES         EXPORT          EXTEND          FALSE
-FILES           FILTER          FIND            FOR             FROM
-FUTURE          GET             GIVING          HEADERS         IF
-IMPORT          IN              INFO            INPUT           INTEGER
-INTO            IS              KEY             LABEL           LET
-LIST            LOG             MAP             MATCH           MILLISECONDS
-MINUTES         MOCK            MODULE          MONEY           MOVE
-MULTIPLY        MUST            NEW             NOSQL           NOT
-OF              ON              OPEN            OR              OTHERWISE
-OUTPUT          PARALLEL        PARAMS          PARSE           PERFORM
-PORT            PRECISION       PROCEDURE       PROGRAM         PUT
-RAISE           READ            RECORD          REPEAT          RESPOND
-RETURN          RETURNING       ROUND           RUN             SAVE
-SECONDS         SENSITIVE       SERVER          SET             SLEEP
-SMALLINT        SORT            STATUS          STOP            SUBTRACT
-SUM             TAKE            TEST            TEXT            TIME
-TIMEOUT         TIMES           TO              TRACE           TRANSFORM
-TRUE            TRY             USING           UUID            VALIDATE
-VARIANT         VERSION         WAIT            WARN            WHEN
-WHERE           WHILE           WITH            WRITE
+ACCEPT          ADD             ALL             AND             AS
+ASSERT          ASYNC           AT              AUTHOR          AWAIT
+BODY            BOOLEAN         CACHE           CALL            CLOSE
+COMBINE         COMPUTE         CONCURRENT      CONDITION       CONFIG
+COUNT           DATA            DATABASE        DATE            DATETIME
+DEBUG           DECIMAL         DEFINE          DELETE          DEPRECATED
+DISPLAY         DIVIDE          DO              EACH            ELSE
+END-CONCURRENT  END-CONFIG      END-FOR         END-IF          END-MATCH
+END-MODULE      END-PERFORM     END-PRECISION   END-PROCEDURE   END-PROGRAM
+END-RECORD      END-SERVER      END-TEST        END-TRY         END-VALIDATE
+END-VARIANT     END-WHILE       END-WITH        ENDPOINT        ENSURE
+ERROR           EXCEPT          EXPIRES         EXPORT          EXTEND
+FALSE           FILES           FILTER          FIND            FOR
+FROM            FUTURE          GET             GIVING          HEADERS
+IF              IMPORT          IN              INFO            INPUT
+INTEGER         INTO            IS              KEY             LABEL
+LET             LIST            LOG             MAP             MATCH
+MILLISECONDS    MINUTES         MOCK            MODULE          MONEY
+MOVE            MULTIPLY        MUST            NEW             NOSQL
+NOT             OF              ON              OPEN            OR
+OTHERWISE       OUTPUT          PARALLEL        PARAMS          PARSE
+PERFORM         PORT            PRECISION       PROCEDURE       PROGRAM
+PUT             RAISE           READ            RECORD          REPEAT
+RESPOND         RETURN          RETURNING       ROUND           RUN
+SAVE            SECONDS         SENSITIVE       SERVER          SET
+SLEEP           SMALLINT        SORT            STATUS          STOP
+SUBTRACT        SUM             TAKE            TEST            TEXT
+TIME            TIMEOUT         TIMES           TO              TRACE
+TRANSFORM       TRUE            TRY             USING           UUID
+VALIDATE        VARIANT         VERSION         WAIT            WARN
+WHEN            WHERE           WHILE           WITH            WRITE
 ```
 
 ### 1.5 Literals
@@ -2501,8 +2501,14 @@ IF NOT CONFIRM "Archive {record-count} records permanently?":
 END-IF
 ```
 
-`ACCEPT FROM TERMINAL` is backed by **JLine3** — provides line editing, history
-(up/down arrow), and tab-completion where the TypeChecker can supply candidates.
+`ACCEPT FROM TERMINAL` reads one line from standard input after printing the prompt;
+end-of-input (EOF / no input) yields an empty string. `ACCEPT FROM ARGUMENT` reads the
+named command-line flag (`--name value` or `--name=value`), falling back to `DEFAULT`
+when the flag is absent. `CONFIRM` returns `true` only for `y`/`yes` and defaults to
+`false` on EOF, so a non-interactive run never silently confirms a destructive action.
+
+> Richer line editing (history, tab-completion via JLine3) is planned but not yet
+> implemented — terminal input is currently plain line-buffered `readLine`.
 
 ---
 

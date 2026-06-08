@@ -28,6 +28,15 @@ internal fun AsmEmitter.emitMock(ctx: MethodContext, stmt: MockStatement) {
     /** Emit a private static void __test_<sanitised name>() method for a TestDecl. */
 internal fun AsmEmitter.emitDisplay(ctx: MethodContext, stmt: DisplayStatement) {
         val mv = ctx.mv
+        // §27.2 DISPLAY PROGRESS — in-place stderr render (void); never goes through println.
+        val only = stmt.values.singleOrNull()
+        if (only is BuiltinCall && only.name == "DISPLAY_PROGRESS") {
+            emitExpr(ctx, only.args[0])           // processed: long
+            emitExpr(ctx, only.args[1])           // total: long
+            emitExprAsString(ctx, only.args[2])   // message: String
+            mv.visitMethodInsn(INVOKESTATIC, "dev/kobol/runtime/KobolDisplay", "progress", "(JJLjava/lang/String;)V", false)
+            return
+        }
         mv.visitFieldInsn(GETSTATIC, SYSTEM, "out", "L$PRINTSTREAM;")
         if (stmt.values.size == 1) {
             emitExprAsString(ctx, stmt.values[0])

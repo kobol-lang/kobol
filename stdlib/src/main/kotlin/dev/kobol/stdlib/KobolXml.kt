@@ -37,6 +37,14 @@ object KobolXml {
     }
 
     /**
+     * §30.1 `WRITE XML value TO path [PRETTY] ROOT "name"` — serialise with an explicit root tag,
+     * overriding the type-derived root element name. One entry point for both PRETTY and plain.
+     */
+    @JvmStatic fun writeWithRoot(value: Any?, path: String, rootName: String, pretty: Boolean) {
+        java.io.File(path).also { it.parentFile?.mkdirs() }.writeText(serialize(value, pretty, rootName))
+    }
+
+    /**
      * Populate the fields of [target] by parsing the XML document in [xml].
      * The root element's child elements are mapped to fields by name.
      */
@@ -62,6 +70,30 @@ object KobolXml {
         parseInto(target, java.io.File(path).readText())
 
     /**
+     * §30.3 `PARSE XML ... NAMESPACES "p" : uri` — validate the document's root namespace against
+     * the declared [uris] before mapping fields. A root namespace not among the declared URIs
+     * raises a descriptive error rather than silently producing empty fields. A document with no
+     * namespace (or no declared URIs) passes through. Field mapping reuses [parseInto] (by local name).
+     */
+    @JvmStatic fun parseIntoNamespaces(target: Any, xml: String, uris: Array<String>) {
+        val doc = DocumentBuilderFactory.newInstance()
+            .also { it.isNamespaceAware = true }
+            .newDocumentBuilder().parse(InputSource(StringReader(xml)))
+        val rootNs = doc.documentElement.namespaceURI
+        if (rootNs != null && uris.isNotEmpty() && rootNs !in uris) {
+            throw IllegalArgumentException(
+                "XML namespace mismatch: document root namespace '$rootNs' is not among the " +
+                "declared NAMESPACES ${uris.toList()}"
+            )
+        }
+        parseInto(target, xml)
+    }
+
+    /** Read XML from a file and validate its namespace against [uris], then populate [target]. */
+    @JvmStatic fun parseFileIntoNamespaces(target: Any, path: String, uris: Array<String>) =
+        parseIntoNamespaces(target, java.io.File(path).readText(), uris)
+
+    /**
      * Parse an XML document whose root contains child elements,
      * returning each child's text content as an ArrayList of Strings.
      */
@@ -85,10 +117,11 @@ object KobolXml {
 
     // ── Serialisation ────────────────────────────────────────────────────
 
-    private fun serialize(value: Any?, indent: Boolean): String {
+    private fun serialize(value: Any?, indent: Boolean, rootName: String? = null): String {
         val factory = DocumentBuilderFactory.newInstance()
         val doc     = factory.newDocumentBuilder().newDocument()
-        val root    = buildElement(doc, rootTagName(value), value)
+        val tag     = rootName?.let { xmlTag(it) } ?: rootTagName(value)
+        val root    = buildElement(doc, tag, value)
         doc.appendChild(root)
 
         val transformer = TransformerFactory.newInstance().newTransformer()

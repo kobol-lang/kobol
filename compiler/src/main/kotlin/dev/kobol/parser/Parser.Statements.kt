@@ -165,14 +165,42 @@ internal fun Parser.parseDivideStatement(): Statement {
         return DivideStatement(divisor, target, giving, mode, p)
     }
 
+    // §27.1 ACCEPT target FROM (TERMINAL PROMPT lit | ARGUMENT lit [DEFAULT lit])
+internal fun Parser.parseAcceptStatement(): Statement {
+        val p = currentPos()
+        expect(ACCEPT, "Expected ACCEPT")
+        val target = parseReference()
+        expect(FROM, "Expected FROM in `ACCEPT <var> FROM ...`")
+        return when {
+            matchKeywordValue("TERMINAL") -> {
+                if (!matchKeywordValue("PROMPT")) throw error("Expected PROMPT after `ACCEPT <var> FROM TERMINAL`")
+                AcceptStatement(target, fromTerminal = true, source = parseExpression(), default = null, pos = p)
+            }
+            matchKeywordValue("ARGUMENT") -> {
+                val flag    = parseExpression()
+                val default = if (matchKeywordValue("DEFAULT")) parseExpression() else null
+                AcceptStatement(target, fromTerminal = false, source = flag, default = default, pos = p)
+            }
+            else -> throw error("Expected TERMINAL or ARGUMENT after `ACCEPT <var> FROM`")
+        }
+    }
+
     // DISPLAY expr (expr | ',' expr)*  — space-separated or comma-separated args
 internal fun Parser.parseDisplayStatement(): Statement {
         val p = currentPos(); expect(DISPLAY, "Expected DISPLAY")
         val values = mutableListOf<Expression>()
         // Handle special DISPLAY TABLE / DISPLAY LABEL / DISPLAY FORMAT
-        if (peek().value == "TABLE" || peek().value == "LABEL" || peek().value == "FORMAT" || peek().value == "JSON" || peek().value == "STYLED" || peek().value == "XML") {
+        if (peek().value == "TABLE" || peek().value == "LABEL" || peek().value == "FORMAT" || peek().value == "JSON" || peek().value == "STYLED" || peek().value == "XML" || peek().value == "PROGRESS") {
             val func = advance().value
-            if (func == "JSON") {
+            if (func == "PROGRESS") {
+                // §27.2 — DISPLAY PROGRESS <done> OF <total> [MESSAGE <text>]. OF is a keyword,
+                // MESSAGE is contextual; both operands stop at them since neither is an infix op.
+                val processed = parseExpression()
+                expect(OF, "Expected OF in `DISPLAY PROGRESS <done> OF <total>`")
+                val total = parseExpression()
+                val message = if (matchKeywordValue("MESSAGE")) parseExpression() else Literal("", LiteralKind.STRING, p)
+                values.add(BuiltinCall("DISPLAY_PROGRESS", listOf(processed, total, message), p))
+            } else if (func == "JSON") {
                 // PRETTY accepted on either side of the expression:
                 //   DISPLAY JSON PRETTY x   (legacy)   and   DISPLAY JSON x PRETTY (spec §26)
                 val pretty = matchKeywordValue("PRETTY")
@@ -361,13 +389,15 @@ internal fun Parser.parseWriteStatement(): Statement {
             val pretty = matchKeywordValue("PRETTY")
             return WriteJsonStatement(expr, path, pretty, p)
         }
-        // WRITE XML expr TO filepath [PRETTY]
+        // WRITE XML expr TO filepath [PRETTY] [ROOT "name"]  (§30.1; ROOT/PRETTY order-independent)
         if (matchKeywordValue("XML")) {
             val expr   = parseExpression()
             expect(TO, "Expected TO in WRITE XML")
             val path   = parseExpression()
-            val pretty = matchKeywordValue("PRETTY")
-            return WriteXmlStatement(expr, path, pretty, p)
+            var pretty = matchKeywordValue("PRETTY")
+            val root   = if (matchKeywordValue("ROOT")) parseExpression() else null
+            if (!pretty) pretty = matchKeywordValue("PRETTY")   // allow `ROOT "x" PRETTY` too
+            return WriteXmlStatement(expr, path, pretty, p, rootName = root)
         }
         val name = expectIdent("Expected file name")
         expect(FROM, "Expected FROM in WRITE")
@@ -402,7 +432,16 @@ internal fun Parser.parseParseStatement(): Statement {
                 asTypeName = expectIdent("Expected type name after AS")
             }
         }
-        return if (isXml) ParseXmlStatement(source, fromFile, into, asTypeName, asList, p)
+        // §30.3 NAMESPACES "prefix" : <uri-expr> (, "prefix" : <uri-expr>)*  (XML only)
+        val namespaces = mutableListOf<Pair<String, Expression>>()
+        if (isXml && matchKeywordValue("NAMESPACES")) {
+            do {
+                val prefix = expectString("Expected namespace prefix string after NAMESPACES")
+                expect(COLON, "Expected ':' after namespace prefix")
+                namespaces.add(prefix to parseExpression())
+            } while (check(COMMA).also { if (it) advance() })
+        }
+        return if (isXml) ParseXmlStatement(source, fromFile, into, asTypeName, asList, p, namespaces = namespaces)
                else        ParseJsonStatement(source, fromFile, into, asTypeName, asList, p)
     }
 

@@ -370,6 +370,7 @@ class Lexer(
 
     companion object {
         val KEYWORDS: Map<String, TokenType> = mapOf(
+            "ACCEPT" to TokenType.ACCEPT,
             "ADD" to TokenType.ADD, "ALL" to TokenType.ALL, "AND" to TokenType.AND,
             "AS" to TokenType.AS, "AUTHOR" to TokenType.AUTHOR,
             "BOOLEAN" to TokenType.BOOLEAN,
