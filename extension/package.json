@@ -10,7 +10,10 @@
   "categories": ["Programming Languages", "Snippets", "Linters", "Formatters"],
   "keywords": ["kobol", "kbl", "cobol", "jvm", "language-server"],
   "repository": { "type": "git", "url": "https://github.com/kobol-lang/kobol" },
-  "activationEvents": [],
+  "activationEvents": [
+    "workspaceContains:**/*.kbl",
+    "workspaceContains:**/kobol.toml"
+  ],
   "main": "./out/extension.js",
 
   "contributes": {
@@ -78,15 +81,54 @@
         "command": "kobol.clean",
         "title": "Kobol: Clean Build Output",
         "category": "Kobol"
+      },
+      {
+        "command": "kobol.runFile",
+        "title": "Kobol: Run Current File",
+        "category": "Kobol",
+        "icon": "$(run)"
+      },
+      {
+        "command": "kobol.transpileJava",
+        "title": "Kobol: Transpile Current File to Java",
+        "category": "Kobol"
+      },
+      {
+        "command": "kobol.checkFile",
+        "title": "Kobol: Type-Check Current File",
+        "category": "Kobol"
+      },
+      {
+        "command": "kobol.newFile",
+        "title": "Kobol: New File",
+        "category": "Kobol",
+        "icon": "$(new-file)"
       }
     ],
 
     "menus": {
       "editor/title/run": [
         {
+          "command": "kobol.runFile",
+          "when": "resourceLangId == kobol",
+          "group": "navigation@1"
+        },
+        {
           "command": "kobol.run",
           "when": "resourceLangId == kobol",
-          "group": "navigation"
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "kobol.runFile",
+          "when": "resourceLangId == kobol",
+          "group": "kobol@1"
+        },
+        {
+          "command": "kobol.transpileJava",
+          "when": "resourceLangId == kobol",
+          "group": "kobol@2"
         }
       ],
       "commandPalette": [
@@ -95,6 +137,10 @@
         { "command": "kobol.test" },
         { "command": "kobol.check" },
         { "command": "kobol.clean" },
+        { "command": "kobol.runFile", "when": "resourceLangId == kobol" },
+        { "command": "kobol.transpileJava", "when": "resourceLangId == kobol" },
+        { "command": "kobol.checkFile", "when": "resourceLangId == kobol" },
+        { "command": "kobol.newFile" },
         { "command": "kobol.restartServer" },
         { "command": "kobol.showVersion" }
       ]
@@ -104,6 +150,11 @@
       {
         "command": "kobol.build",
         "key": "ctrl+shift+b",
+        "when": "resourceLangId == kobol"
+      },
+      {
+        "command": "kobol.runFile",
+        "key": "ctrl+f5",
         "when": "resourceLangId == kobol"
       }
     ],

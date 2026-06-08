@@ -43,8 +43,9 @@ class KobolLanguageServer : LanguageServer, LanguageClientAware {
             hoverProvider      = Either.forLeft(true)
             definitionProvider = Either.forLeft(true)
             referencesProvider = Either.forLeft(true)
+            documentHighlightProvider = Either.forLeft(true)
             completionProvider = CompletionOptions(true, listOf(".", " ", "\""))
-            renameProvider     = Either.forLeft(true)
+            renameProvider     = Either.forRight(RenameOptions().apply { prepareProvider = true })
 
             // New: outline, signature help, folding, code actions, inlay hints,
             //      workspace symbol search, document formatting
@@ -55,6 +56,12 @@ class KobolLanguageServer : LanguageServer, LanguageClientAware {
             codeActionProvider = Either.forLeft(true)
             inlayHintProvider = Either.forLeft(true)
             documentFormattingProvider = Either.forLeft(true)
+            documentOnTypeFormattingProvider = DocumentOnTypeFormattingOptions(":")
+            semanticTokensProvider = SemanticTokensWithRegistrationOptions(
+                SemanticTokensLegend(SEMANTIC_TOKEN_TYPES, emptyList()),
+            ).apply { setFull(true) }
+            codeLensProvider = CodeLensOptions(false)
+            callHierarchyProvider = Either.forLeft(true)
         }
         val info = ServerInfo("kobolc", dev.kobol.VERSION)
         return CompletableFuture.completedFuture(InitializeResult(cap, info))

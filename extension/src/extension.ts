@@ -115,7 +115,105 @@ function registerCommands(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('kobol.test',  () => runTask('test')),
         vscode.commands.registerCommand('kobol.check', () => runTask('check')),
         vscode.commands.registerCommand('kobol.clean', () => runTask('clean')),
+
+        // File-level commands backed directly by the kobolc CLI
+        vscode.commands.registerCommand('kobol.runFile',      () => runKobolcOnActiveFile(context, 'run')),
+        vscode.commands.registerCommand('kobol.transpileJava', () => runKobolcOnActiveFile(context, 'transpile')),
+        vscode.commands.registerCommand('kobol.checkFile',    () => runKobolcOnActiveFile(context, 'check')),
+        vscode.commands.registerCommand('kobol.newFile',      () => createNewKobolFile()),
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  File-level kobolc commands (run / transpile / check the active .kbl file)
+// ─────────────────────────────────────────────────────────────────────────────
+
+type FileAction = 'run' | 'transpile' | 'check';
+
+function runKobolcOnActiveFile(context: vscode.ExtensionContext, action: FileAction) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'kobol') {
+        vscode.window.showErrorMessage('Kobol: open a .kbl file first');
+        return;
+    }
+    if (editor.document.isDirty) { editor.document.save(); }
+
+    const filePath = editor.document.uri.fsPath;
+    const invocation = resolveKobolcInvocation(context);
+    if (!invocation) {
+        vscode.window.showWarningMessage(
+            'Kobol: no kobolc binary or jar found. Build the compiler with ' +
+            '`./gradlew :compiler:jar`, or set kobol.nativeBinaryPath / kobol.kobolcJar.',
+        );
+        return;
+    }
+
+    // Map the UI action onto the verified kobolc CLI surface.
+    const fileArgs: Record<FileAction, string[]> = {
+        run:       ['run', filePath],
+        transpile: [filePath, '--java-source', '-o', path.join(path.dirname(filePath), 'out')],
+        check:     ['--check', filePath],
+    };
+    const label: Record<FileAction, string> = {
+        run: 'run', transpile: 'transpile to Java', check: 'check',
+    };
+
+    const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+    const scope  = folder ?? vscode.TaskScope.Workspace;
+    const task = new vscode.Task(
+        { type: 'kobol', task: action },
+        scope,
+        `Kobol: ${label[action]} ${path.basename(filePath)}`,
+        'kobol',
+        new vscode.ShellExecution(invocation.cmd, [...invocation.baseArgs, ...fileArgs[action]], {
+            cwd: folder?.uri.fsPath ?? path.dirname(filePath),
+        }),
+        ['$kobolc'],
+    );
+    task.presentationOptions = {
+        reveal: vscode.TaskRevealKind.Always,
+        panel:  vscode.TaskPanelKind.Shared,
+        clear:  true,
+    };
+    vscode.tasks.executeTask(task);
+}
+
+/**
+ * Resolve how to invoke the kobolc compiler synchronously (no auto-download —
+ * commands must be instant). Prefers a native binary, then a fat jar.
+ */
+function resolveKobolcInvocation(
+    context: vscode.ExtensionContext,
+): { cmd: string; baseArgs: string[] } | undefined {
+    const config = vscode.workspace.getConfiguration('kobol');
+
+    const exeSuffix = process.platform === 'win32' ? '.exe' : '';
+    const nativeCandidates = [
+        config.get<string>('nativeBinaryPath') || '',
+        path.join(context.extensionPath, 'bin', `kobol${exeSuffix}`),
+        path.join(context.globalStorageUri.fsPath, 'bin', `kobol${exeSuffix}`),
+    ];
+    for (const bin of nativeCandidates) {
+        if (bin && fs.existsSync(bin)) return { cmd: bin, baseArgs: [] };
+    }
+
+    const jar = resolveKobolcJar(context);
+    if (jar) {
+        const java = config.get<string>('javaExecutable') || 'java';
+        return { cmd: java, baseArgs: ['-jar', jar] };
+    }
+    return undefined;
+}
+
+/** Scaffold a fresh untitled .kbl document with a minimal program skeleton. */
+async function createNewKobolFile() {
+    const skeleton =
+        'PROGRAM NewProgram VERSION "1.0"\n\n' +
+        'DATA:\n  -- add data items here\n\n' +
+        'PROCEDURE Main:\n  DISPLAY "Hello from Kobol"\n  STOP RUN\n' +
+        'END-PROCEDURE\n';
+    const doc = await vscode.workspace.openTextDocument({ language: 'kobol', content: skeleton });
+    await vscode.window.showTextDocument(doc);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -413,5 +413,92 @@
       "  AS LIST OF ${0:TypeName}"
     ],
     "description": "JDBC parameterised query"
+  },
+  "PARSE XML": {
+    "prefix": "parsexml",
+    "body": ["PARSE XML ${1:xml-text} INTO ${2:target} AS ${0:TypeName}"],
+    "description": "Parse XML into a typed record"
+  },
+  "WRITE XML": {
+    "prefix": "writexml",
+    "body": ["WRITE XML ${1:value} TO \"${0:output.xml}\""],
+    "description": "Write a value as XML to a file"
+  },
+  "DISPLAY XML": {
+    "prefix": "dispxml",
+    "body": ["DISPLAY XML ${1:value}${0: PRETTY}"],
+    "description": "Display a value as XML"
+  },
+  "CONCURRENT SCOPE": {
+    "prefix": "cscope",
+    "body": [
+      "CONCURRENT SCOPE \"${1:pipeline-name}\":",
+      "  DO ${2:ProcA}",
+      "  DO ${3:ProcB}",
+      "WAIT ALL OR FAIL"
+    ],
+    "description": "Named structured-concurrency scope (fail-fast)"
+  },
+  "FOR EACH PARALLEL": {
+    "prefix": "forep",
+    "body": [
+      "FOR EACH ${1:item} IN ${2:collection} PARALLEL MAX-THREADS ${3:8}:",
+      "  DO ${4:ProcessItem} USING ${1:item}",
+      "END-FOR"
+    ],
+    "description": "Parallel FOR EACH over virtual threads"
+  },
+  "Async procedure + AWAIT": {
+    "prefix": "future",
+    "body": [
+      "ASYNC PROCEDURE ${1:FetchValue} USING ${2:arg} : ${3:TEXT} RETURNING ${4:DECIMAL}:",
+      "  ${5:-- async body}",
+      "  RETURN ${6:result}",
+      "END-PROCEDURE",
+      "",
+      "DATA:",
+      "  ${7:value-task} : FUTURE OF ${4:DECIMAL}",
+      "  ${8:value}      : ${4:DECIMAL}",
+      "PERFORM ${1:FetchValue} USING ${9:input} GIVING ${7:value-task}",
+      "AWAIT ${7:value-task} INTO ${0:value}"
+    ],
+    "description": "ASYNC PROCEDURE + FUTURE + PERFORM GIVING + AWAIT INTO"
+  },
+  "DISPLAY STYLED": {
+    "prefix": "styled",
+    "body": ["DISPLAY STYLED \"${1:text}\" ${0|BOLD,UNDERLINE,COLOR GREEN,COLOR RED,COLOR YELLOW|}"],
+    "description": "Styled terminal output"
+  },
+  "DISPLAY TABLE": {
+    "prefix": "disptable",
+    "body": ["DISPLAY TABLE ${0:list-value}"],
+    "description": "Render a list as a table"
+  },
+  "SENSITIVE field": {
+    "prefix": "sensitive",
+    "body": ["${1:field-name} : TEXT SENSITIVE"],
+    "description": "Sensitive field (redacted in logs/output)"
+  },
+  "VALIDATE (full constraints)": {
+    "prefix": "validatem",
+    "body": [
+      "VALIDATE ${1:target}:",
+      "  MUST NOT BE EMPTY",
+      "  MUST LENGTH >= ${2:8}",
+      "  MUST BE > ${3:0}              FAIL-MSG \"${4:Must be positive}\"",
+      "  MUST SATISFY ${0:ProcedureName}",
+      "END-VALIDATE"
+    ],
+    "description": "VALIDATE with MUST constraints"
+  },
+  "LET = UUID-GENERATE": {
+    "prefix": "uuid",
+    "body": ["LET ${1:id} = UUID-GENERATE()"],
+    "description": "Generate a new UUID (parentheses required)"
+  },
+  "NEW (Java constructor)": {
+    "prefix": "newjava",
+    "body": ["LET ${1:obj} = NEW ${2:ClassName} WITH ${0:args}"],
+    "description": "Construct a Java object via NEW"
   }
 }

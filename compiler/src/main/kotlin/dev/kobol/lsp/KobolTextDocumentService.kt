@@ -2,6 +2,7 @@ package dev.kobol.lsp
 
 import dev.kobol.lexer.LexException
 import dev.kobol.lexer.Lexer
+import dev.kobol.lexer.TokenType
 import dev.kobol.parser.ParseException
 import dev.kobol.parser.Parser
 import dev.kobol.parser.ast.*
@@ -10,6 +11,7 @@ import dev.kobol.semantic.Symbol
 import dev.kobol.semantic.TypeChecker
 import org.eclipse.lsp4j.*
 import org.eclipse.lsp4j.jsonrpc.messages.Either
+import org.eclipse.lsp4j.jsonrpc.messages.Either3
 import org.eclipse.lsp4j.services.TextDocumentService
 import java.net.URI
 import java.io.File
@@ -114,27 +116,170 @@ class KobolTextDocumentService(private val server: KobolLanguageServer) : TextDo
         val state = docs[params.textDocument.uri] ?: return CompletableFuture.completedFuture(emptyList())
         val token = tokenAtPosition(state.lines, params.position.line + 1, params.position.character + 1)
             ?: return CompletableFuture.completedFuture(emptyList())
+        val locations = findWordOccurrences(state.lines, token)
+            .map { Location(params.textDocument.uri, it) }
+        return CompletableFuture.completedFuture(locations)
+    }
 
-        // AST-driven reference finding: find all positions where this token appears
-        // as an identifier (not as part of a keyword sequence)
-        val locations = mutableListOf<Location>()
-        state.lines.forEachIndexed { lineIdx, lineText ->
-            var start = 0
-            val upper = lineText.uppercase()
-            while (true) {
-                val idx = upper.indexOf(token, start)
-                if (idx < 0) break
-                // Verify it's a whole-word match (not part of a longer identifier)
-                val before = if (idx > 0) upper[idx - 1] else ' '
-                val after  = if (idx + token.length < upper.length) upper[idx + token.length] else ' '
-                if (!before.isIdentChar() && !after.isIdentChar()) {
-                    val range = Range(Position(lineIdx, idx), Position(lineIdx, idx + token.length))
-                    locations += Location(params.textDocument.uri, range)
-                }
-                start = idx + 1
+    // ── Document Highlight ───────────────────────────────────────────────────
+
+    override fun documentHighlight(
+        params: DocumentHighlightParams,
+    ): CompletableFuture<List<DocumentHighlight>> {
+        val state = docs[params.textDocument.uri] ?: return CompletableFuture.completedFuture(emptyList())
+        val token = tokenAtPosition(state.lines, params.position.line + 1, params.position.character + 1)
+            ?: return CompletableFuture.completedFuture(emptyList())
+        val highlights = findWordOccurrences(state.lines, token)
+            .map { DocumentHighlight(it, DocumentHighlightKind.Text) }
+        return CompletableFuture.completedFuture(highlights)
+    }
+
+    // ── Code Lens (inline Run / Run Tests) ────────────────────────────────────
+
+    override fun codeLens(params: CodeLensParams): CompletableFuture<List<CodeLens>> {
+        val program = docs[params.textDocument.uri]?.program
+            ?: return CompletableFuture.completedFuture(emptyList())
+        return CompletableFuture.completedFuture(buildCodeLenses(program))
+    }
+
+    /**
+     * Build inline action lenses: a "▶ Run" lens over the `Main` procedure and a
+     * "▶ Run Tests" lens over every TEST / TEST TABLE block. The commands are the
+     * client-side `kobol.runFile` / `kobol.test` commands (no args — they act on
+     * the active editor). Pure for unit-testing.
+     */
+    internal fun buildCodeLenses(program: Program): List<CodeLens> {
+        val lenses = mutableListOf<CodeLens>()
+
+        program.procedures
+            .filter { it.name.equals("Main", ignoreCase = true) }
+            .forEach { proc ->
+                lenses += CodeLens(
+                    declRange(proc.pos),
+                    Command("▶ Run", "kobol.runFile"),
+                    null,
+                )
+            }
+
+        val testPositions = program.tests.map { it.pos } + program.tableTests.map { it.pos }
+        for (pos in testPositions) {
+            lenses += CodeLens(declRange(pos), Command("▶ Run Tests", "kobol.test"), null)
+        }
+
+        return lenses
+    }
+
+    /** Zero-width range at a declaration's 0-based start position. */
+    private fun declRange(pos: dev.kobol.lexer.SourcePosition): Range {
+        val line = (pos.line - 1).coerceAtLeast(0)
+        val col  = (pos.column - 1).coerceAtLeast(0)
+        return Range(Position(line, col), Position(line, col))
+    }
+
+    // ── Call Hierarchy ─────────────────────────────────────────────────────
+
+    override fun prepareCallHierarchy(
+        params: CallHierarchyPrepareParams,
+    ): CompletableFuture<List<CallHierarchyItem>> {
+        val state   = docs[params.textDocument.uri]
+        val program = state?.program ?: return CompletableFuture.completedFuture(emptyList())
+        val lines   = state.lines
+
+        // Either the procedure named at the cursor, or the procedure enclosing it.
+        val token = tokenAtPosition(lines, params.position.line + 1, params.position.character + 1)
+        val byName = program.procedures.firstOrNull { it.name.equals(token, ignoreCase = true) }
+        val proc = byName ?: enclosingProcedure(program, lines, params.position.line)
+            ?: return CompletableFuture.completedFuture(emptyList())
+
+        return CompletableFuture.completedFuture(listOf(procItem(params.textDocument.uri, proc, lines)))
+    }
+
+    override fun callHierarchyOutgoingCalls(
+        params: CallHierarchyOutgoingCallsParams,
+    ): CompletableFuture<List<CallHierarchyOutgoingCall>> {
+        val uri     = params.item.uri
+        val state   = docs[uri]
+        val program = state?.program ?: return CompletableFuture.completedFuture(emptyList())
+        val lines   = state.lines
+        val proc = program.procedures.firstOrNull { it.name.equals(params.item.name, ignoreCase = true) }
+            ?: return CompletableFuture.completedFuture(emptyList())
+
+        val start = (proc.pos.line - 1).coerceAtLeast(0)
+        val end   = findEndKeyword(lines, start, "END-PROCEDURE") ?: lines.lastIndex
+        // callee name (upper) → all call-site ranges within this procedure
+        val byCallee = procedureCallSites(lines, start, end).groupBy({ it.first }, { it.second })
+
+        val calls = byCallee.mapNotNull { (callee, ranges) ->
+            val target = program.procedures.firstOrNull { it.name.equals(callee, ignoreCase = true) }
+                ?: return@mapNotNull null
+            CallHierarchyOutgoingCall(procItem(uri, target, lines), ranges)
+        }
+        return CompletableFuture.completedFuture(calls)
+    }
+
+    override fun callHierarchyIncomingCalls(
+        params: CallHierarchyIncomingCallsParams,
+    ): CompletableFuture<List<CallHierarchyIncomingCall>> {
+        val uri     = params.item.uri
+        val state   = docs[uri]
+        val program = state?.program ?: return CompletableFuture.completedFuture(emptyList())
+        val lines   = state.lines
+        val targetName = params.item.name.uppercase()
+
+        val calls = program.procedures.mapNotNull { caller ->
+            val start = (caller.pos.line - 1).coerceAtLeast(0)
+            val end   = findEndKeyword(lines, start, "END-PROCEDURE") ?: lines.lastIndex
+            val hits  = procedureCallSites(lines, start, end).filter { it.first == targetName }.map { it.second }
+            if (hits.isEmpty()) null
+            else CallHierarchyIncomingCall(procItem(uri, caller, lines), hits)
+        }
+        return CompletableFuture.completedFuture(calls)
+    }
+
+    /** Build a CallHierarchyItem for a procedure declaration. */
+    private fun procItem(uri: String, proc: ProcedureDecl, lines: List<String>): CallHierarchyItem {
+        val start   = (proc.pos.line - 1).coerceAtLeast(0)
+        val col     = (proc.pos.column - 1).coerceAtLeast(0)
+        val end     = findEndKeyword(lines, start, "END-PROCEDURE") ?: start
+        val item = CallHierarchyItem()
+        item.name = proc.name
+        item.kind = if (proc.isAsync) SymbolKind.Event else SymbolKind.Function
+        item.uri  = uri
+        item.range = Range(Position(start, col), Position(end, 0))
+        item.selectionRange = Range(Position(start, col), Position(start, col + proc.name.length))
+        return item
+    }
+
+    /** The procedure whose body region contains the 0-based [line], or null. */
+    private fun enclosingProcedure(program: Program, lines: List<String>, line: Int): ProcedureDecl? =
+        program.procedures.firstOrNull { proc ->
+            val start = (proc.pos.line - 1).coerceAtLeast(0)
+            val end   = findEndKeyword(lines, start, "END-PROCEDURE") ?: lines.lastIndex
+            line in start..end
+        }
+
+    /**
+     * All `PERFORM`/`DO` call sites in lines [startLine0]..[endLine0], as
+     * (calleeNameUpper, nameRange) pairs. Textual scan — module-qualified calls
+     * (`PERFORM Alias.Proc`) contribute the bare procedure name. Pure for testing.
+     */
+    internal fun procedureCallSites(
+        lines: List<String>,
+        startLine0: Int,
+        endLine0: Int,
+    ): List<Pair<String, Range>> {
+        val rx = Regex("\\b(?:PERFORM|DO)\\s+([A-Za-z][\\w-]*(?:\\.[A-Za-z][\\w-]*)?)")
+        val out = mutableListOf<Pair<String, Range>>()
+        for (i in startLine0..endLine0.coerceAtMost(lines.lastIndex)) {
+            for (m in rx.findAll(lines[i])) {
+                val raw    = m.groupValues[1]
+                val dotIdx = raw.lastIndexOf('.')
+                val callee = if (dotIdx >= 0) raw.substring(dotIdx + 1) else raw
+                val nameStart = m.groups[1]!!.range.first + (if (dotIdx >= 0) dotIdx + 1 else 0)
+                out += callee.uppercase() to Range(Position(i, nameStart), Position(i, nameStart + callee.length))
             }
         }
-        return CompletableFuture.completedFuture(locations)
+        return out
     }
 
     // ── Completion ─────────────────────────────────────────────────────────
@@ -465,21 +610,21 @@ class KobolTextDocumentService(private val server: KobolLanguageServer) : TextDo
         val actions = mutableListOf<Either<Command, CodeAction>>()
 
         for (diag in params.context.diagnostics) {
-            val code = diag.code?.get()?.toString() ?: continue
+            val code = diag.code?.get()?.toString() ?: ""
+
+            // General: ANY diagnostic carrying a "did you mean: X" suggestion gets
+            // a one-click replacement — covers undefined variables (E001),
+            // unknown types, fields, modules, etc. without a per-code branch.
+            extractSuggestion(diag.message)?.let { suggestion ->
+                val action = CodeAction("Change to '$suggestion'")
+                action.kind = CodeActionKind.QuickFix
+                action.diagnostics = listOf(diag)
+                action.edit = WorkspaceEdit(mapOf(uri to listOf(TextEdit(diag.range, suggestion))))
+                action.isPreferred = true
+                actions += Either.forRight(action)
+            }
 
             when (code) {
-                // E001 undefined variable — offer did-you-mean fix
-                "E001" -> {
-                    val suggestion = extractSuggestion(diag.message) ?: continue
-                    val edit = TextEdit(diag.range, suggestion)
-                    val wsEdit = WorkspaceEdit(mapOf(uri to listOf(edit)))
-                    val action = CodeAction("Fix: use '$suggestion'")
-                    action.kind = CodeActionKind.QuickFix
-                    action.diagnostics = listOf(diag)
-                    action.edit = wsEdit
-                    action.isPreferred = true
-                    actions += Either.forRight(action)
-                }
                 // E006 undefined procedure — offer PERFORM scaffold
                 "E006" -> {
                     val msg = diag.message
@@ -581,38 +726,50 @@ class KobolTextDocumentService(private val server: KobolLanguageServer) : TextDo
     // ── Document Formatting ────────────────────────────────────────────────
 
     override fun formatting(params: DocumentFormattingParams): CompletableFuture<List<TextEdit>> {
-        val state = docs[params.textDocument.uri] ?: return CompletableFuture.completedFuture(emptyList())
-        val lines = state.lines
-        val edits = mutableListOf<TextEdit>()
-        val indent = " ".repeat(params.options.tabSize.takeIf { it > 0 } ?: 2)
+        val lines = docs[params.textDocument.uri]?.lines
+            ?: return CompletableFuture.completedFuture(emptyList())
+        return CompletableFuture.completedFuture(computeIndentEdits(lines, params.options.tabSize))
+    }
 
+    override fun onTypeFormatting(
+        params: DocumentOnTypeFormattingParams,
+    ): CompletableFuture<List<TextEdit>> {
+        val lines = docs[params.textDocument.uri]?.lines
+            ?: return CompletableFuture.completedFuture(emptyList())
+        // Re-derive whole-document indentation, but only return the edit for the
+        // line just typed on — so finishing a block opener (`:`) snaps it to its
+        // correct depth without disturbing the rest of the file.
+        val edits = computeIndentEdits(lines, params.options.tabSize)
+            .filter { it.range.start.line == params.position.line }
+        return CompletableFuture.completedFuture(edits)
+    }
+
+    /**
+     * Depth-based re-indentation edits for the whole document: each block opener
+     * (line ending `:`) increases depth; each `END-*`/`ELSE`/`ON`/`ENSURE`/
+     * `OTHERWISE` decreases it. Heuristic (no AST), shared by formatting and
+     * onTypeFormatting. Pure for testing.
+     */
+    internal fun computeIndentEdits(lines: List<String>, tabSize: Int): List<TextEdit> {
+        val indent = " ".repeat(tabSize.takeIf { it > 0 } ?: 2)
+        val edits = mutableListOf<TextEdit>()
         var depth = 0
         lines.forEachIndexed { idx, line ->
             val trimmed = line.trim()
             val upper   = trimmed.uppercase()
 
-            // Decrease indent before END-* / ELSE / ON / ENSURE / OTHERWISE
             if (DEDENT_KEYWORDS.any { upper.startsWith(it) }) depth = (depth - 1).coerceAtLeast(0)
 
-            val expected = indent.repeat(depth)
-            val actual   = line.length - line.trimStart().length
+            val expected  = indent.repeat(depth)
+            val actual    = line.length - line.trimStart().length
             val actualStr = " ".repeat(actual)
-
             if (actualStr != expected && trimmed.isNotEmpty()) {
-                edits += TextEdit(
-                    Range(Position(idx, 0), Position(idx, actual)),
-                    expected,
-                )
+                edits += TextEdit(Range(Position(idx, 0), Position(idx, actual)), expected)
             }
 
-            // Increase indent after lines ending with ':'
-            if (trimmed.endsWith(":") && !DEDENT_KEYWORDS.any { upper.startsWith(it) }) {
-                depth++
-            }
-            // Decrease after END-* (already decreased above, not again)
+            if (trimmed.endsWith(":") && !DEDENT_KEYWORDS.any { upper.startsWith(it) }) depth++
         }
-
-        return CompletableFuture.completedFuture(edits)
+        return edits
     }
 
     // ── Rename ─────────────────────────────────────────────────────────────
@@ -622,9 +779,49 @@ class KobolTextDocumentService(private val server: KobolLanguageServer) : TextDo
         val token = tokenAtPosition(state.lines, params.position.line + 1, params.position.character + 1)
             ?: return CompletableFuture.completedFuture(null)
         val newName = params.newName
+        val edits = findWordOccurrences(state.lines, token).map { TextEdit(it, newName) }
+        return CompletableFuture.completedFuture(WorkspaceEdit(mapOf(params.textDocument.uri to edits)))
+    }
 
-        val edits = mutableListOf<TextEdit>()
-        state.lines.forEachIndexed { lineIdx, lineText ->
+    override fun prepareRename(
+        params: PrepareRenameParams,
+    ): CompletableFuture<Either3<Range, PrepareRenameResult, PrepareRenameDefaultBehavior>?> {
+        val state = docs[params.textDocument.uri] ?: return CompletableFuture.completedFuture(null)
+        val range = wordRangeAt(state.lines, params.position.line, params.position.character)
+            ?: return CompletableFuture.completedFuture(null)
+        val word = state.lines[range.start.line]
+            .substring(range.start.character, range.end.character)
+        // Reserved keywords are not renameable — reject so the editor shows
+        // "cannot rename" instead of silently rewriting language syntax.
+        if (Lexer.KEYWORDS.containsKey(word.uppercase())) {
+            return CompletableFuture.completedFuture(null)
+        }
+        return CompletableFuture.completedFuture(Either3.forFirst(range))
+    }
+
+    /** Range of the identifier word covering the 0-based [line0]/[char0], or null. */
+    internal fun wordRangeAt(lines: List<String>, line0: Int, char0: Int): Range? {
+        val lineText = lines.getOrNull(line0) ?: return null
+        if (lineText.isEmpty()) return null
+        val c = char0.coerceIn(0, lineText.length - 1)
+        var start = c
+        while (start > 0 && lineText[start - 1].isIdentChar()) start--
+        var end = c
+        while (end < lineText.length && lineText[end].isIdentChar()) end++
+        if (start == end || !lineText[start].isIdentChar()) return null
+        return Range(Position(line0, start), Position(line0, end))
+    }
+
+    /**
+     * All whole-word, case-insensitive occurrences of [token] across [lines], as
+     * ranges. Shared by references / documentHighlight / rename. This is a
+     * textual scan (single-file, scope-unaware) — see #F8 for the planned
+     * AST/scope-aware replacement; keeping it in one place makes that a
+     * single-point swap.
+     */
+    internal fun findWordOccurrences(lines: List<String>, token: String): List<Range> {
+        val ranges = mutableListOf<Range>()
+        lines.forEachIndexed { lineIdx, lineText ->
             var start = 0
             val upper = lineText.uppercase()
             while (true) {
@@ -633,12 +830,25 @@ class KobolTextDocumentService(private val server: KobolLanguageServer) : TextDo
                 val before = if (idx > 0) upper[idx - 1] else ' '
                 val after  = if (idx + token.length < upper.length) upper[idx + token.length] else ' '
                 if (!before.isIdentChar() && !after.isIdentChar()) {
-                    edits += TextEdit(Range(Position(lineIdx, idx), Position(lineIdx, idx + token.length)), newName)
+                    ranges += Range(Position(lineIdx, idx), Position(lineIdx, idx + token.length))
                 }
                 start = idx + 1
             }
         }
-        return CompletableFuture.completedFuture(WorkspaceEdit(mapOf(params.textDocument.uri to edits)))
+        return ranges
+    }
+
+    // ── Semantic Tokens ──────────────────────────────────────────────────────
+
+    override fun semanticTokensFull(
+        params: SemanticTokensParams,
+    ): CompletableFuture<SemanticTokens> {
+        val state   = docs[params.textDocument.uri]
+        val checker = state?.checker
+            ?: return CompletableFuture.completedFuture(SemanticTokens(emptyList()))
+        return CompletableFuture.completedFuture(
+            SemanticTokens(computeSemanticTokens(state.lines, checker)),
+        )
     }
 
     // ── Core: analyse & publish ────────────────────────────────────────────
@@ -746,6 +956,66 @@ private fun ParseException.toLspDiagnostic(): Diagnostic {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Semantic tokens
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Legend indices — order MUST match SEMANTIC_TOKEN_TYPES and the legend
+// registered in KobolLanguageServer.initialize.
+internal const val SEMTOK_FUNCTION = 0
+internal const val SEMTOK_STRUCT   = 1
+internal const val SEMTOK_ENUM     = 2
+internal const val SEMTOK_VARIABLE = 3
+
+/** Semantic token type legend advertised to the client. */
+internal val SEMANTIC_TOKEN_TYPES = listOf("function", "struct", "enum", "variable")
+
+/**
+ * Compute LSP semantic tokens for a document: re-lexes the source and classifies
+ * each identifier by the kind of top-level symbol it resolves to (procedure →
+ * function, record → struct, variant → enum, data global → variable). Identifiers
+ * that don't resolve to a top-level symbol (locals, params, keywords, literals)
+ * are left to the TextMate grammar.
+ *
+ * Returns the flat 5-ints-per-token delta encoding the LSP protocol expects.
+ * Pure (no LSP client / IO) so it is unit-testable directly from a [TypeChecker].
+ */
+internal fun computeSemanticTokens(lines: List<String>, checker: TypeChecker): List<Int> {
+    val tokens = try {
+        Lexer(lines.joinToString("\n"), "doc.kbl").tokenize()
+    } catch (e: LexException) {
+        return emptyList()
+    }
+
+    data class Tok(val line: Int, val char: Int, val len: Int, val type: Int)
+    val collected = ArrayList<Tok>()
+    for (t in tokens) {
+        if (t.type != TokenType.IDENTIFIER) continue
+        val typeIdx = when (checker.symbols.resolve(t.value)) {
+            is Symbol.ProcedureSymbol -> SEMTOK_FUNCTION
+            is Symbol.RecordSymbol    -> SEMTOK_STRUCT
+            is Symbol.VariantSymbol   -> SEMTOK_ENUM
+            is Symbol.Variable,
+            is Symbol.Constant        -> SEMTOK_VARIABLE
+            else                      -> continue
+        }
+        collected += Tok(t.pos.line - 1, t.pos.column - 1, t.rawValue.length, typeIdx)
+    }
+    collected.sortWith(compareBy({ it.line }, { it.char }))
+
+    val data = ArrayList<Int>(collected.size * 5)
+    var prevLine = 0
+    var prevChar = 0
+    for (tk in collected) {
+        val dLine = tk.line - prevLine
+        val dChar = if (dLine == 0) tk.char - prevChar else tk.char
+        data.add(dLine); data.add(dChar); data.add(tk.len); data.add(tk.type); data.add(0)
+        prevLine = tk.line
+        prevChar = tk.char
+    }
+    return data
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Keyword lists
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -776,50 +1046,42 @@ private val KEYWORD_DOC = mapOf(
     "SLEEP"      to "Pause execution for a duration",
 )
 
-internal val KOBOL_KEYWORDS = listOf(
-    // Core control
-    "IF", "ELSE", "END-IF", "FOR", "EACH", "IN", "END-FOR",
-    "WHILE", "END-WHILE", "REPEAT", "TIMES", "END-REPEAT",
-    "TRY", "ON", "AS", "ENSURE", "END-TRY",
-    "STOP", "RUN", "RETURN", "RAISE", "MATCH", "OTHERWISE", "END-MATCH",
-    // Declarations
-    "PROGRAM", "PROCEDURE", "END-PROCEDURE", "END-PROGRAM",
-    "RECORD", "END-RECORD", "FIELDS",
-    "DATA", "FILES", "DEFINE", "TYPE", "IS",
-    "IMPORT", "VERSION", "AUTHOR",
-    "CONDITION", "WHEN", "WHERE",
-    "VARIANT", "END-VARIANT",
-    "MODULE", "EXPORT", "END-MODULE",
-    "TEST", "END-TEST", "TABLE",
-    "CONFIG", "END-CONFIG",
-    "VALIDATE", "END-VALIDATE",
-    "SERVER", "END-SERVER", "ENDPOINT",
-    // Operations
-    "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "COMPUTE", "ROUND",
-    "MOVE", "SET", "LET", "DO", "PERFORM", "CALL", "AWAIT",
-    "DISPLAY", "READ", "WRITE", "OPEN", "CLOSE",
-    "FILTER", "SORT", "TAKE", "TRANSFORM", "SUM",
-    "PARSE", "ASSERT", "MOCK",
-    "SLEEP", "LOG",
-    // Clauses
-    "GIVING", "USING", "WITH", "FROM", "TO", "INTO", "BY",
-    "RETURNING", "AND", "OR", "NOT", "IS",
+/**
+ * Clause / contextual words the parser accepts in specific positions but the
+ * lexer does NOT reserve (so they are absent from [Lexer.KEYWORDS]). Offered in
+ * completion for ergonomics. Hand-maintained but small and additive — anything
+ * the lexer actually reserves comes from [Lexer.KEYWORDS] below, never here.
+ */
+private val CONTEXTUAL_KEYWORDS = listOf(
+    // structure / declaration clause words
+    "FIELDS", "TYPE", "TABLE", "COLUMNS", "ROW", "RETURNS", "RAISES",
+    "GIVEN", "THEN",
+    // arithmetic rounding / precision presets (§12.4)
+    "DECIMAL32", "DECIMAL64", "DECIMAL128", "UNLIMITED",
+    "HALF-UP", "HALF-EVEN", "HALF-DOWN", "CEILING", "FLOOR",
+    // condition / validation clause words (§19)
     "POSITIVE", "NEGATIVE", "ZERO", "EMPTY", "BLANK",
-    "MILLISECONDS", "SECONDS", "MINUTES",
-    "MUST", "SATISFY", "LENGTH", "REQUIRED", "DEFAULT",
-    "CONCURRENT", "PARALLEL", "WAIT", "ALL", "ASYNC", "FUTURE",
-    "COLUMNS", "ROW",
-    "PRECISION", "DECIMAL128", "HALF-UP", "HALF-EVEN",
-    // Types
-    "INTEGER", "SMALLINT", "DECIMAL", "MONEY",
-    "TEXT", "BOOLEAN", "DATE", "TIME", "DATETIME",
-    "LIST", "MAP", "OF", "UUID",
-    // Literals
-    "TRUE", "FALSE",
-    // Logging levels
-    "TRACE", "DEBUG", "INFO", "WARN", "ERROR",
-    // NoSQL / Cache / HTTP
-    "NOSQL", "CACHE", "DATABASE", "FIND", "SAVE", "DELETE", "COUNT",
-    "GET", "POST", "PUT", "PATCH", "RESPOND", "STATUS",
-    "HEADERS", "BODY", "TIMEOUT", "PORT", "AT",
+    "SATISFY", "LENGTH", "REQUIRED", "DEFAULT", "BE",
+    // concurrency clauses (§18)
+    "FIRST", "SCOPE", "MAX-THREADS", "ATOMIC",
+    // collection-pipeline clauses
+    "BY", "ASCENDING", "DESCENDING", "LIMIT",
+    // serialization (§26, §30)
+    "JSON", "XML", "PRETTY", "ROOT", "NAMESPACES",
+    // HTTP verbs not lexer-reserved (§25, §28)
+    "POST", "PATCH",
+    // CLI / TUI (§27)
+    "ACCEPT", "CONFIRM", "TERMINAL", "ARGUMENT", "PROGRESS", "STYLED",
+    // env-backed config (§20)
+    "ENV", "KEYSTORE",
 )
+
+/**
+ * All keywords offered in completion: every reserved word from [Lexer.KEYWORDS]
+ * — the single source of truth, CI-guarded against the spec by
+ * `KeywordSpecSyncTest`, so this list can never drift from the real lexer —
+ * plus the contextual clause words above. De-duplicated and sorted for a stable
+ * completion order.
+ */
+internal val KOBOL_KEYWORDS: List<String> =
+    (Lexer.KEYWORDS.keys + CONTEXTUAL_KEYWORDS).distinct().sorted()
