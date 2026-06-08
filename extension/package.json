@@ -8,7 +8,7 @@
   "icon": "icon.png",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Snippets", "Linters", "Formatters"],
-  "keywords": ["kobol", "kbl", "cobol", "jvm", "language-server"],
+  "keywords": ["kobol", "kobol-lang", "kobol language", "Kobol Programming Language", "kbl", "cobol", "jvm", "language-server"],
   "repository": { "type": "git", "url": "https://github.com/kobol-lang/kobol" },
   "activationEvents": [
     "workspaceContains:**/*.kbl",
@@ -20,7 +20,7 @@
     "languages": [
       {
         "id": "kobol",
-        "aliases": ["Kobol", "kobol", "kbl"],
+        "aliases": ["Kobol", "Kobol Programming Language", "kobol", "kobol-lang", "kbl"],
         "extensions": [".kbl"],
         "configuration": "./language-configuration.json",
         "icon": {

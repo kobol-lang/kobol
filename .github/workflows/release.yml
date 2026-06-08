@@ -514,3 +514,54 @@ jobs:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         if: ${{ env.OVSX_PAT != '' }}
         run: npx --yes ovsx publish kobol-*.vsix --pat "$OVSX_PAT"
+
+  # ---------------------------------------------------------------------------
+  # 9. Submit the winget package (Windows x64)
+  #    Stamps the version + the windows zip's SHA-256 (pulled from the release's
+  #    SHA256SUMS.txt) into the multi-file manifest, then opens a PR against
+  #    microsoft/winget-pkgs via wingetcreate. winget rejects a placeholder
+  #    digest, so this job is what makes `winget validate` pass for real.
+  #    Requires secret: WINGET_TOKEN — a classic PAT with `public_repo` scope so
+  #    wingetcreate can fork winget-pkgs and open the PR.
+  # ---------------------------------------------------------------------------
+  winget:
+    name: Submit winget package
+    needs: [native, release]
+    runs-on: windows-latest
+    # DISABLED until ready: set repository variable WINGET_ENABLED=true to turn on.
+    # (Settings > Secrets and variables > Actions > Variables.) Also skips pre-releases.
+    if: ${{ vars.WINGET_ENABLED == 'true' && !contains(github.ref_name, '-') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version + checksum into winget manifests
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $sumsUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/SHA256SUMS.txt"
+          $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
+          $line = ($sums -split "`n") | Where-Object { $_ -match 'kobol-windows-x86_64\.zip' } | Select-Object -First 1
+          if (-not $line) { throw "kobol-windows-x86_64.zip not found in SHA256SUMS.txt" }
+          $hash = (($line -split '\s+')[0]).Trim().ToUpper()
+          if ($hash -notmatch '^[A-F0-9]{64}$') { throw "Bad SHA-256 parsed: '$hash'" }
+          Get-ChildItem winget/*.yaml | ForEach-Object {
+            (Get-Content $_.FullName -Raw) `
+              -replace '(?m)^PackageVersion: .*$', "PackageVersion: $version" `
+              -replace 'releases/download/v[^/]+/', "releases/download/v$version/" `
+              -replace '(releases/tag/v)[^\s]+', "`${1}$version" `
+              -replace 'PLACEHOLDER_WINDOWS_X86_64_SHA256', $hash |
+              Set-Content $_.FullName
+          }
+          Write-Host "----- stamped installer manifest -----"
+          Get-Content winget/kobol-lang.kobol.installer.yaml
+
+      - name: Download wingetcreate
+        shell: pwsh
+        run: Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Submit PR to winget-pkgs
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        if: ${{ env.WINGET_TOKEN != '' }}
+        shell: pwsh
+        run: .\wingetcreate.exe submit --token $env:WINGET_TOKEN winget

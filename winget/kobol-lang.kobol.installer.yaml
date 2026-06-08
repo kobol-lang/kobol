@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# =============================================================================
+# Windows Package Manager (winget) — INSTALLER manifest for the Kobol compiler.
+# =============================================================================
+PackageIdentifier: kobol-lang.kobol
+PackageVersion: 0.1.0
+InstallerType: zip
+Commands:
+  - kobol
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/kobol-lang/kobol/releases/download/v0.1.0/kobol-windows-x86_64.zip
+    InstallerSha256: PLACEHOLDER_WINDOWS_X86_64_SHA256
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: kobol.exe
+        PortableCommandAlias: kobol
+ManifestType: installer
+ManifestVersion: 1.6.0

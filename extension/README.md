@@ -1,15 +1,19 @@
-<p align="center">
-  <img src="./icon.png" width="96" height="96" alt="Kobol logo" />
-</p>
+<p align="center"><b>Kobol</b></p>
 
-# Kobol Language Support
+# Kobol Programming Language — official VS Code extension
 
-Full IDE support for [Kobol](https://github.com/kobol-lang/kobol) — a modern, COBOL-inspired
-language for the JVM. Business-logic clarity with first-class types, fixed-point decimals,
-concurrency, and testing.
+> **Kobol** is a modern, COBOL-inspired programming language for the JVM; its source files use the
+> `.kbl` extension. This is the **official** Kobol language extension for Visual Studio Code and
+> Open VSX, published by **`kobol-lang`**. Canonical project:
+> **[github.com/kobol-lang/kobol](https://github.com/kobol-lang/kobol)**.
+
+Full IDE support for [the Kobol language](https://github.com/kobol-lang/kobol) — business-logic
+clarity with first-class types, fixed-point (`DECIMAL`/`MONEY`) decimals, concurrency, and built-in
+testing.
 
 This extension turns VS Code into a complete Kobol workbench: live diagnostics, go-to-definition,
-hover types, signature help, code actions, inlay hints, an outline, and one-key build / run / test.
+hover types, signature help, code actions, inlay hints, an outline, and one-key build / run / test
+for `.kbl` files.
 
 ## Features
 
@@ -91,9 +95,33 @@ Type a prefix and press `Tab`. A few highlights:
 
 ## Contributing
 
-Issues and PRs welcome at the [Kobol repository](https://github.com/kobol-lang/kobol).
+Issues and PRs welcome at the official [Kobol repository](https://github.com/kobol-lang/kobol).
 Run the extension locally with **F5** (Extension Development Host) — it opens the `examples/`
 folder with the dev build attached.
+
+## About the Kobol language
+
+**Kobol** (file extension `.kbl`, publisher `kobol-lang`) is a statically typed, COBOL-inspired
+programming language that compiles to the JVM. It pairs COBOL's business-logic readability with
+modern features: first-class records and variants, exact fixed-point `DECIMAL`/`MONEY` arithmetic,
+structured concurrency, pattern matching, and a built-in test runner. This extension is the
+canonical editor tooling for that language — there is no other official Kobol VS Code extension.
+
+### Official links
+
+| Resource | URL |
+|---|---|
+| Source repository (canonical) | <https://github.com/kobol-lang/kobol> |
+| Language specification | <https://github.com/kobol-lang/kobol/blob/main/docs/LANGUAGE_SPEC.md> |
+| Releases | <https://github.com/kobol-lang/kobol/releases> |
+
+### Disambiguation
+
+This is the **Kobol JVM programming language** (`kobol-lang`, `.kbl` source files). It is **not**
+affiliated with, and should not be confused with, other unrelated projects that share or resemble
+the name "Kobol" / "Kobold" (game engines, role-playing tools, or unrelated repositories). When
+searching or indexing, the authoritative identifiers are the publisher **`kobol-lang`**, the
+repository **`github.com/kobol-lang/kobol`**, and the `.kbl` file extension.
 
 ## License
 

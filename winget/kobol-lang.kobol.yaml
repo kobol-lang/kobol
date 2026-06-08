@@ -1,45 +1,18 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
 # =============================================================================
-# Windows Package Manager (winget) manifest for the Kobol compiler.
+# Windows Package Manager (winget) — VERSION manifest for the Kobol compiler.
 #
-# File location in the winget-pkgs repository:
+# This package uses the multi-file manifest layout required by winget-pkgs:
 #   manifests/k/kobol-lang/kobol/0.1.0/
+#     kobol-lang.kobol.yaml              (this file — version)
+#     kobol-lang.kobol.installer.yaml    (installer)
+#     kobol-lang.kobol.locale.en-US.yaml (defaultLocale)
 #
 # Install:
 #   winget install kobol-lang.kobol
 # =============================================================================
 PackageIdentifier: kobol-lang.kobol
 PackageVersion: 0.1.0
-PackageLocale: en-US
-Publisher: Kobol Language Contributors
-PublisherUrl: https://github.com/kobol-lang
-PublisherSupportUrl: https://github.com/kobol-lang/kobol/issues
-PackageName: Kobol
-PackageUrl: https://github.com/kobol-lang/kobol
-License: MIT
-LicenseUrl: https://github.com/kobol-lang/kobol/blob/main/LICENSE
-ShortDescription: A modern COBOL-inspired language for the JVM
-Description: |-
-  Kobol is a modern COBOL-inspired programming language that compiles to JVM
-  bytecode.  It features static typing, a clean syntax, first-class REST API
-  support, SQL integration, and a native binary distribution with sub-50ms
-  startup.
-Tags:
-  - compiler
-  - jvm
-  - cobol
-  - kobol
-  - language
-Moniker: kobol
-ReleaseNotesUrl: https://github.com/kobol-lang/kobol/releases/tag/v0.1.0
-ManifestType: defaultLocale
+DefaultLocale: en-US
+ManifestType: version
 ManifestVersion: 1.6.0
-Installers:
-  - Architecture: x64
-    InstallerType: zip
-    InstallerUrl: https://github.com/kobol-lang/kobol/releases/download/v0.1.0/kobol-windows-x86_64.zip
-    InstallerSha256: PLACEHOLDER_WINDOWS_X86_64_SHA256
-    NestedInstallerType: portable
-    NestedInstallerFiles:
-      - RelativeFilePath: kobol.exe
-        PortableCommandAlias: kobol

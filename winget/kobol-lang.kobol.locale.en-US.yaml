@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# =============================================================================
+# Windows Package Manager (winget) — DEFAULTLOCALE manifest for the Kobol compiler.
+# =============================================================================
+PackageIdentifier: kobol-lang.kobol
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: kobol-lang
+PublisherUrl: https://github.com/kobol-lang
+PublisherSupportUrl: https://github.com/kobol-lang/kobol/issues
+Author: Vikram G Palakurthi
+PackageName: Kobol
+PackageUrl: https://kobol-lang.org/
+License: Apache-2.0
+LicenseUrl: https://github.com/kobol-lang/kobol/blob/main/LICENSE
+Copyright: Copyright 2026 Vikram G Palakurthi
+ShortDescription: A modern COBOL-inspired language for the JVM
+Description: |-
+  Kobol is a modern COBOL-inspired programming language that compiles to JVM
+  bytecode. It features static typing, exact decimal arithmetic, pattern
+  matching, virtual-thread concurrency, built-in testing, an HTTP/REST client,
+  a lightweight REST API server, parameterised JDBC/SQL, and a native binary
+  distribution with sub-50ms startup.
+Moniker: kobol
+Tags:
+  - compiler
+  - jvm
+  - cobol
+  - kobol
+  - language
+ReleaseNotesUrl: https://github.com/kobol-lang/kobol/releases/tag/v0.1.0
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
