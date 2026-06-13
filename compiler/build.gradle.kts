@@ -192,7 +192,6 @@ graalvmNative {
             mainClass.set("dev.kobol.MainKt")
             // Hard fail if reflection is missing rather than fall back to JVM
             buildArgs.add("--no-fallback")
-            buildArgs.add("--no-server")
             buildArgs.add("-H:+ReportExceptionStackTraces")
             // Kotlin stdlib can be fully initialized at build time
             buildArgs.add("--initialize-at-build-time=kotlin")

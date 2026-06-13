@@ -154,6 +154,12 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.gradle.kts') }}
 
+      - name: Configure MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Make gradlew executable (Unix)
         if: runner.os != 'Windows'
         run: chmod +x gradlew
