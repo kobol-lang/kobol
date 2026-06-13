@@ -210,6 +210,9 @@ graalvmNative {
             buildArgs.add(
                 "-H:SerializationConfigurationFiles=${projectDir}/src/graalvm/serialization-config.json"
             )
+            buildArgs.add(
+                "-H:DynamicProxyConfigurationFiles=${projectDir}/src/graalvm/proxy-config.json"
+            )
         }
     }
     metadataRepository {

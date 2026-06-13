@@ -318,6 +318,9 @@ function startLspClient(context: vscode.ExtensionContext, serverOptions: ServerO
 async function resolveNativeBinary(
     context: vscode.ExtensionContext,
 ): Promise<string | undefined> {
+    if (vscode.workspace.getConfiguration('kobol').get<string>('lspMode') === 'jar') {
+        return undefined;
+    }
     const setting = vscode.workspace.getConfiguration('kobol').get<string>('nativeBinaryPath');
     if (setting && fs.existsSync(setting)) return setting;
 

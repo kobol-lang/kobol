@@ -491,6 +491,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
+      - name: Sync version.ts from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/KOBOL_VERSION = '.*'/KOBOL_VERSION = '$VERSION'/" src/version.ts
+
       - name: Package VSIX
         run: npx --yes @vscode/vsce package --out "kobol-${GITHUB_REF_NAME#v}.vsix"
 

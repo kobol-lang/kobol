@@ -2,7 +2,7 @@
   "name": "kobol-language-support",
   "displayName": "Kobol Programming Language",
   "description": "Full IDE support for Kobol (.kbl) — syntax highlighting, diagnostics, go-to-definition, hover types, outline, signature help, code actions, inlay hints, folding, and build integration",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "publisher": "kobol-lang",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -212,6 +212,12 @@
           "type": "string",
           "default": "",
           "description": "Path to the 'kobol' native binary. Leave empty to auto-download from GitHub Releases."
+        },
+        "kobol.lspMode": {
+          "type": "string",
+          "enum": ["native", "jar"],
+          "default": "native",
+          "description": "Language server startup mode. 'jar' forces JVM mode (java -jar kobolc.jar) and skips the native binary entirely. Use 'jar' as a workaround if the native binary fails to start."
         },
         "kobol.buildTool": {
           "type": "string",
